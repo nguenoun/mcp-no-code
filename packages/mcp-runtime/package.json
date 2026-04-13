@@ -1,0 +1,22 @@
+{
+  "name": "@mcpbuilder/mcp-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.1.0",
+    "@mcpbuilder/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "openapi-types": "^12.1.3",
+    "yaml": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.5"
+  }
+}

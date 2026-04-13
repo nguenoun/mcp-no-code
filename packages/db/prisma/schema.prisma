@@ -1,0 +1,136 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Plan {
+  FREE
+  PRO
+  TEAM
+  ENTERPRISE
+}
+
+enum ServerStatus {
+  RUNNING
+  STOPPED
+  ERROR
+}
+
+enum CredentialType {
+  API_KEY
+  BEARER
+  BASIC_AUTH
+}
+
+enum CallStatus {
+  SUCCESS
+  ERROR
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  name         String?
+  passwordHash String?
+  googleId     String?     @unique
+  plan         Plan        @default(FREE)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  workspaces   Workspace[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  userId    String
+  createdAt DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mcpServers  McpServer[]
+  credentials Credential[]
+
+  @@index([userId])
+  @@map("workspaces")
+}
+
+model McpServer {
+  id          String       @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  status      ServerStatus @default(STOPPED)
+  endpointUrl String?
+  apiKey      String       @unique @default(cuid())
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tools     McpTool[]
+  callLogs  CallLog[]
+
+  @@index([workspaceId])
+  @@map("mcp_servers")
+}
+
+model McpTool {
+  id               String    @id @default(cuid())
+  mcpServerId      String
+  name             String
+  description      String?
+  httpMethod       String
+  httpUrl          String
+  parametersSchema Json      @default("{}")
+  headersConfig    Json      @default("{}")
+  isEnabled        Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+
+  mcpServer McpServer @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+
+  @@index([mcpServerId])
+  @@map("mcp_tools")
+}
+
+model Credential {
+  id             String         @id @default(cuid())
+  workspaceId    String
+  name           String
+  type           CredentialType
+  encryptedValue String
+  createdAt      DateTime       @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("credentials")
+}
+
+model CallLog {
+  id           String     @id @default(cuid())
+  mcpServerId  String
+  toolName     String
+  status       CallStatus
+  latencyMs    Int?
+  errorMessage String?
+  createdAt    DateTime   @default(now())
+
+  mcpServer McpServer @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+
+  @@index([mcpServerId])
+  @@index([createdAt])
+  @@map("call_logs")
+}
