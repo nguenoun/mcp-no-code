@@ -51,7 +51,7 @@ export default function RegisterPage() {
         email: values.email,
         password: values.password,
       })
-      router.push('/dashboard')
+      router.push('/')
       router.refresh()
     } catch (err: unknown) {
       const message =

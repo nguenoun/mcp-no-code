@@ -69,19 +69,21 @@ model Workspace {
 }
 
 model McpServer {
-  id          String       @id @default(cuid())
-  workspaceId String
-  name        String
-  description String?
-  status      ServerStatus @default(STOPPED)
-  endpointUrl String?
-  apiKey      String       @unique @default(cuid())
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id           String       @id @default(cuid())
+  workspaceId  String
+  name         String
+  description  String?
+  status       ServerStatus @default(STOPPED)
+  endpointUrl  String?
+  apiKey       String       @unique @default(cuid())
+  credentialId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  tools     McpTool[]
-  callLogs  CallLog[]
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  credential Credential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  tools      McpTool[]
+  callLogs   CallLog[]
 
   @@index([workspaceId])
   @@map("mcp_servers")
@@ -113,7 +115,8 @@ model Credential {
   encryptedValue String
   createdAt      DateTime       @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  mcpServers  McpServer[]
 
   @@index([workspaceId])
   @@map("credentials")

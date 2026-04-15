@@ -2,7 +2,6 @@
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { useSession } from 'next-auth/react'
 import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +16,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useImportFromUrl, useImportFromContent } from '@/hooks/use-import'
+import { useDefaultWorkspace } from '@/hooks/use-workspace'
+import { useCreateServer } from '@/hooks/use-servers'
+import { apiClient } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 import type { ParsedOpenAPIResult, ParsedTool } from '@mcpbuilder/shared'
 
@@ -534,10 +536,7 @@ function Step3Name({
 
 export default function NewServerPage() {
   const router = useRouter()
-  const { data: session } = useSession()
-
-  // TODO: replace with real workspaceId from session/context
-  const workspaceId = (session as { workspaceId?: string } | null)?.workspaceId ?? 'placeholder'
+  const { workspaceId } = useDefaultWorkspace()
 
   const [step, setStep] = useState<Step>(1)
   const [source, setSource] = useState<Source>('openapi')
@@ -556,6 +555,7 @@ export default function NewServerPage() {
 
   const importFromUrl = useImportFromUrl()
   const importFromContent = useImportFromContent()
+  const createServer = useCreateServer(workspaceId ?? '')
 
   const isLoading = importFromUrl.isPending || importFromContent.isPending
 
@@ -566,9 +566,9 @@ export default function NewServerPage() {
     try {
       let result: ParsedOpenAPIResult
       if (openApiTab === 'url') {
-        result = await importFromUrl.mutateAsync({ url: urlInput.trim(), workspaceId })
+        result = await importFromUrl.mutateAsync({ url: urlInput.trim(), workspaceId: workspaceId ?? '' })
       } else {
-        result = await importFromContent.mutateAsync({ content: contentInput, workspaceId })
+        result = await importFromContent.mutateAsync({ content: contentInput, workspaceId: workspaceId ?? '' })
       }
 
       setParsedResult(result)
@@ -625,30 +625,39 @@ export default function NewServerPage() {
   // ─── Submit ─────────────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(async () => {
-    if (!parsedResult) return
+    if (!parsedResult || !workspaceId) return
     setIsSubmitting(true)
     try {
-      const selectedTools = [...selectedIds].map((i) => ({
-        name: edits[i]?.name ?? parsedResult.tools[i]!.suggestedName,
-        description: edits[i]?.description ?? parsedResult.tools[i]!.suggestedDescription,
-        httpMethod: parsedResult.tools[i]!.httpMethod,
-        httpUrl: `${parsedResult.baseUrl}${parsedResult.tools[i]!.httpPath}`,
-        parametersSchema: parsedResult.tools[i]!.parametersSchema,
-      }))
-
-      // TODO: POST /api/v1/workspaces/:workspaceId/servers once the route is implemented
-      console.log('Creating MCP server:', {
+      // 1. Create the MCP server
+      const server = await createServer.mutateAsync({
         name: serverName,
-        description: serverDescription,
-        workspaceId,
-        tools: selectedTools,
+        ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
 
-      router.push('/dashboard')
+      // 2. Create each selected tool via apiClient (sequential to avoid conflicts)
+      const toolPayloads = [...selectedIds].map((i) => ({
+        name: edits[i]?.name ?? parsedResult.tools[i]!.suggestedName,
+        description: edits[i]?.description ?? parsedResult.tools[i]!.suggestedDescription,
+        httpMethod: parsedResult.tools[i]!.httpMethod as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+        httpUrl: parsedResult.baseUrl
+          ? `${parsedResult.baseUrl.replace(/\/$/, '')}${parsedResult.tools[i]!.httpPath}`
+          : parsedResult.tools[i]!.httpPath,
+        parametersSchema: parsedResult.tools[i]!.parametersSchema,
+        headersConfig: [],
+        isEnabled: true,
+      }))
+
+      for (const payload of toolPayloads) {
+        await apiClient.post(`/api/v1/servers/${server.id}/tools`, payload)
+      }
+
+      router.push(`/servers/${server.id}`)
+    } catch {
+      // Errors are surfaced via createServer.error if needed
     } finally {
       setIsSubmitting(false)
     }
-  }, [parsedResult, selectedIds, edits, serverName, serverDescription, workspaceId, router])
+  }, [parsedResult, selectedIds, edits, serverName, serverDescription, workspaceId, router, createServer])
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 

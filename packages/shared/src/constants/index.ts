@@ -1,4 +1,4 @@
-import { Plan, ServerStatus, CredentialType } from '../types/models.js'
+import { Plan, ServerStatus, CredentialType } from '../types/models'
 
 // ─── Plans ───────────────────────────────────────────────────────────────────
 
