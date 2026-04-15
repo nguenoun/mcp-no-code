@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '@mcpbuilder/db'
 import type { ApiResponse } from '@mcpbuilder/shared'
-import { encrypt, decrypt, getMasterKey } from '@mcpbuilder/mcp-runtime'
+import { decrypt, getMasterKey } from '@mcpbuilder/mcp-runtime'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 
@@ -122,9 +122,9 @@ router.post('/', authMiddleware, async (req, res, next) => {
     await getWorkspaceForUser(workspaceId, req.user.sub)
 
     const body = createCredentialSchema.parse(req.body)
-    const masterKey = getMasterKey()
-    const plaintext = serializeValue(body.type, body.value)
-    const encryptedValue = encrypt(plaintext, masterKey)
+    // Pass the plaintext to Prisma — the encryption middleware in packages/db
+    // automatically encrypts it and adds the "enc:" prefix before storing.
+    const encryptedValue = serializeValue(body.type, body.value)
 
     const credential = await prisma.credential.create({
       data: {

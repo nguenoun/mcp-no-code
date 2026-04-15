@@ -63,8 +63,10 @@ export function encrypt(plaintext: string, masterKey: string): string {
  * @throws             if the payload is tampered or the key is wrong (GCM auth failure)
  */
 export function decrypt(encryptedB64: string, masterKey: string): string {
+  // Strip optional "enc:" prefix written by the Prisma encryption middleware
+  const raw = encryptedB64.startsWith('enc:') ? encryptedB64.slice(4) : encryptedB64
   const keyBuf = Buffer.from(masterKey, 'hex')
-  const buf = Buffer.from(encryptedB64, 'base64')
+  const buf = Buffer.from(raw, 'base64')
 
   if (buf.length < IV_BYTES + TAG_BYTES) {
     throw new Error('Invalid encrypted payload: too short')

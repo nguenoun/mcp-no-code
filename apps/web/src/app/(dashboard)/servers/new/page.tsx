@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
+import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
@@ -32,6 +33,16 @@ interface ToolEdit {
   name: string
   description: string
 }
+
+interface ManualTool {
+  name: string
+  description: string
+  httpMethod: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  httpUrl: string
+}
+
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
+const BLANK_TOOL: ManualTool = { name: '', description: '', httpMethod: 'GET', httpUrl: '' }
 
 // ─── HTTP method badge helper ─────────────────────────────────────────────────
 
@@ -293,7 +304,14 @@ function Step1Source({
         </div>
       )}
 
-      {source !== 'openapi' && (
+      {source === 'manual' && (
+        <Button className="w-full" onClick={onNext}>
+          Continuer
+          <ChevronRight className="h-4 w-4 ml-2" />
+        </Button>
+      )}
+
+      {source === 'template' && (
         <Button className="w-full" disabled>
           Bientôt disponible
         </Button>
@@ -318,7 +336,7 @@ function ToolsSkeleton() {
   )
 }
 
-// ─── Step 2 — Configure tools ─────────────────────────────────────────────────
+// ─── Step 2 — Configure tools (OpenAPI) ──────────────────────────────────────
 
 function Step2Tools({
   tools,
@@ -423,7 +441,198 @@ function Step2Tools({
   )
 }
 
-// ─── Step 3 — Name the server ─────────────────────────────────────────────────
+// ─── Step 2 — Configure tools (Manual) ───────────────────────────────────────
+
+function Step2ManualTools({
+  tools,
+  onToolsChange,
+  onNext,
+  onBack,
+}: {
+  tools: ManualTool[]
+  onToolsChange: (tools: ManualTool[]) => void
+  onNext: () => void
+  onBack: () => void
+}) {
+  const [form, setForm] = useState<ManualTool>({ ...BLANK_TOOL })
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [showForm, setShowForm] = useState(true)
+
+  const isFormValid = form.name.trim() !== '' && form.description.trim() !== '' && form.httpUrl.trim() !== ''
+
+  const handleSave = () => {
+    if (!isFormValid) return
+    if (editingIndex !== null) {
+      const updated = [...tools]
+      updated[editingIndex] = form
+      onToolsChange(updated)
+      setEditingIndex(null)
+    } else {
+      onToolsChange([...tools, form])
+    }
+    setForm({ ...BLANK_TOOL })
+    setShowForm(false)
+  }
+
+  const handleEdit = (i: number) => {
+    setForm({ ...tools[i]! })
+    setEditingIndex(i)
+    setShowForm(true)
+  }
+
+  const handleDelete = (i: number) => {
+    onToolsChange(tools.filter((_, idx) => idx !== i))
+    if (editingIndex === i) {
+      setEditingIndex(null)
+      setForm({ ...BLANK_TOOL })
+      setShowForm(tools.length <= 1)
+    }
+  }
+
+  const handleCancelForm = () => {
+    setForm({ ...BLANK_TOOL })
+    setEditingIndex(null)
+    setShowForm(false)
+  }
+
+  return (
+    <div className="space-y-4">
+      {tools.length > 0 && (
+        <ScrollArea className="max-h-[280px] pr-3">
+          <div className="space-y-2">
+            {tools.map((tool, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'rounded-lg border p-3 transition-colors',
+                  editingIndex === i ? 'border-primary/40 bg-primary/5' : 'border-border',
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <MethodBadge method={tool.httpMethod} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-mono font-medium truncate">{tool.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{tool.httpUrl}</p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => handleEdit(i)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      onClick={() => handleDelete(i)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      )}
+
+      {showForm ? (
+        <div className="rounded-lg border border-primary/30 bg-muted/20 p-4 space-y-3">
+          <p className="text-sm font-medium">
+            {editingIndex !== null ? 'Modifier le tool' : 'Nouveau tool'}
+          </p>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-1 space-y-1">
+              <Label className="text-xs">Méthode</Label>
+              <Select
+                value={form.httpMethod}
+                onValueChange={(v) => setForm((f) => ({ ...f, httpMethod: v as ManualTool['httpMethod'] }))}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HTTP_METHODS.map((m) => (
+                    <SelectItem key={m} value={m} className="text-xs font-mono">
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="col-span-2 space-y-1">
+              <Label className="text-xs">URL</Label>
+              <Input
+                placeholder="https://api.example.com/endpoint"
+                value={form.httpUrl}
+                onChange={(e) => setForm((f) => ({ ...f, httpUrl: e.target.value }))}
+                className="h-8 text-xs font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-xs">Nom du tool</Label>
+            <Input
+              placeholder="get_user, create_payment…"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              className="h-8 text-xs font-mono"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-xs">Description</Label>
+            <Input
+              placeholder="Récupère les informations d'un utilisateur par son ID"
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              className="h-8 text-xs"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            {tools.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={handleCancelForm} className="flex-1">
+                Annuler
+              </Button>
+            )}
+            <Button size="sm" onClick={handleSave} disabled={!isFormValid} className="flex-1">
+              {editingIndex !== null ? 'Enregistrer' : 'Ajouter'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={() => { setEditingIndex(null); setForm({ ...BLANK_TOOL }); setShowForm(true) }}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Ajouter un tool
+        </Button>
+      )}
+
+      <Separator />
+
+      <div className="flex gap-3">
+        <Button variant="outline" onClick={onBack} className="flex-1">
+          Retour
+        </Button>
+        <Button onClick={onNext} disabled={tools.length === 0} className="flex-1">
+          Suivant
+          <ChevronRight className="h-4 w-4 ml-2" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Step 3 — Name the server (OpenAPI) ──────────────────────────────────────
 
 function Step3Name({
   tools,
@@ -532,6 +741,102 @@ function Step3Name({
   )
 }
 
+// ─── Step 3 — Name the server (Manual) ───────────────────────────────────────
+
+function Step3NameManual({
+  manualTools,
+  serverName,
+  onServerNameChange,
+  serverDescription,
+  onServerDescriptionChange,
+  onSubmit,
+  onBack,
+  isSubmitting,
+}: {
+  manualTools: ManualTool[]
+  serverName: string
+  onServerNameChange: (v: string) => void
+  serverDescription: string
+  onServerDescriptionChange: (v: string) => void
+  onSubmit: () => void
+  onBack: () => void
+  isSubmitting: boolean
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="server-name-manual">Nom du serveur MCP</Label>
+          <Input
+            id="server-name-manual"
+            placeholder="Mon serveur MCP"
+            value={serverName}
+            onChange={(e) => onServerNameChange(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="server-desc-manual">
+            Description{' '}
+            <span className="text-muted-foreground font-normal">(optionnel)</span>
+          </Label>
+          <Textarea
+            id="server-desc-manual"
+            placeholder="Description de votre serveur MCP…"
+            value={serverDescription}
+            onChange={(e) => onServerDescriptionChange(e.target.value)}
+            className="min-h-[80px]"
+          />
+        </div>
+      </div>
+
+      <Separator />
+
+      <div className="rounded-lg bg-muted/50 p-4 space-y-3">
+        <p className="text-sm font-medium">Récapitulatif</p>
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-muted-foreground">Tools configurés</dt>
+          <dd>{manualTools.length}</dd>
+        </dl>
+
+        <div className="flex flex-wrap gap-1 mt-2">
+          {manualTools.slice(0, 8).map((tool, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <MethodBadge method={tool.httpMethod} />
+              <span className="text-xs font-mono">{tool.name}</span>
+            </div>
+          ))}
+          {manualTools.length > 8 && (
+            <span className="text-xs text-muted-foreground">
+              +{manualTools.length - 8} autres…
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <Button variant="outline" onClick={onBack} className="flex-1">
+          Retour
+        </Button>
+        <Button
+          onClick={onSubmit}
+          disabled={!serverName.trim() || isSubmitting}
+          className="flex-1"
+        >
+          {isSubmitting ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Création…
+            </>
+          ) : (
+            'Créer le serveur MCP'
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function NewServerPage() {
@@ -546,8 +851,12 @@ export default function NewServerPage() {
   const [parseError, setParseError] = useState<string | null>(null)
   const [parsedResult, setParsedResult] = useState<ParsedOpenAPIResult | null>(null)
 
+  // OpenAPI tool state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [edits, setEdits] = useState<Record<number, ToolEdit>>({})
+
+  // Manual tool state
+  const [manualTools, setManualTools] = useState<ManualTool[]>([])
 
   const [serverName, setServerName] = useState('')
   const [serverDescription, setServerDescription] = useState('')
@@ -559,7 +868,7 @@ export default function NewServerPage() {
 
   const isLoading = importFromUrl.isPending || importFromContent.isPending
 
-  // ─── Analyze ────────────────────────────────────────────────────────────────
+  // ─── Analyze (OpenAPI) ────────────────────────────────────────────────────────
 
   const handleAnalyze = useCallback(async () => {
     setParseError(null)
@@ -573,7 +882,6 @@ export default function NewServerPage() {
 
       setParsedResult(result)
 
-      // Pre-select all tools, pre-populate edits with suggested values
       const allIds = new Set(result.tools.map((_, i) => i))
       setSelectedIds(allIds)
       const initialEdits: Record<number, ToolEdit> = {}
@@ -582,7 +890,6 @@ export default function NewServerPage() {
       })
       setEdits(initialEdits)
 
-      // Pre-fill server name from spec title
       if (!serverName) setServerName(result.title)
     } catch (err: unknown) {
       const msg =
@@ -595,7 +902,7 @@ export default function NewServerPage() {
     }
   }, [openApiTab, urlInput, contentInput, workspaceId, importFromUrl, importFromContent, serverName])
 
-  // ─── Toggle tool selection ───────────────────────────────────────────────────
+  // ─── Toggle tool selection (OpenAPI) ─────────────────────────────────────────
 
   const handleToggle = useCallback((i: number) => {
     setSelectedIds((prev) => {
@@ -622,19 +929,17 @@ export default function NewServerPage() {
     [],
   )
 
-  // ─── Submit ─────────────────────────────────────────────────────────────────
+  // ─── Submit (OpenAPI) ─────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(async () => {
     if (!parsedResult || !workspaceId) return
     setIsSubmitting(true)
     try {
-      // 1. Create the MCP server
       const server = await createServer.mutateAsync({
         name: serverName,
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
 
-      // 2. Create each selected tool via apiClient (sequential to avoid conflicts)
       const toolPayloads = [...selectedIds].map((i) => ({
         name: edits[i]?.name ?? parsedResult.tools[i]!.suggestedName,
         description: edits[i]?.description ?? parsedResult.tools[i]!.suggestedDescription,
@@ -659,14 +964,47 @@ export default function NewServerPage() {
     }
   }, [parsedResult, selectedIds, edits, serverName, serverDescription, workspaceId, router, createServer])
 
+  // ─── Submit (Manual) ──────────────────────────────────────────────────────────
+
+  const handleSubmitManual = useCallback(async () => {
+    if (!workspaceId) return
+    setIsSubmitting(true)
+    try {
+      const server = await createServer.mutateAsync({
+        name: serverName,
+        ...(serverDescription.trim() && { description: serverDescription.trim() }),
+      })
+
+      for (const tool of manualTools) {
+        await apiClient.post(`/api/v1/servers/${server.id}/tools`, {
+          name: tool.name,
+          description: tool.description,
+          httpMethod: tool.httpMethod,
+          httpUrl: tool.httpUrl,
+          parametersSchema: {},
+          headersConfig: [],
+          isEnabled: true,
+        })
+      }
+
+      router.push(`/servers/${server.id}`)
+    } catch {
+      // Errors are surfaced via createServer.error if needed
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [manualTools, serverName, serverDescription, workspaceId, router, createServer])
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   const stepTitles: Record<Step, { title: string; description: string }> = {
     1: { title: 'Nouvelle source', description: 'Choisissez comment créer votre serveur MCP' },
-    2: {
-      title: 'Configurer les tools',
-      description: `${parsedResult?.tools.length ?? 0} tools détectés — sélectionnez et personnalisez`,
-    },
+    2: source === 'manual'
+      ? { title: 'Configurer les tools', description: 'Ajoutez les tools de votre serveur MCP' }
+      : {
+          title: 'Configurer les tools',
+          description: `${parsedResult?.tools.length ?? 0} tools détectés — sélectionnez et personnalisez`,
+        },
     3: { title: 'Nommer le serveur', description: 'Dernière étape avant de créer votre serveur' },
   }
 
@@ -706,7 +1044,7 @@ export default function NewServerPage() {
             </div>
           )}
 
-          {step === 2 && parsedResult && (
+          {step === 2 && source === 'openapi' && parsedResult && (
             <Step2Tools
               tools={parsedResult.tools}
               selectedIds={selectedIds}
@@ -719,7 +1057,16 @@ export default function NewServerPage() {
             />
           )}
 
-          {step === 3 && parsedResult && (
+          {step === 2 && source === 'manual' && (
+            <Step2ManualTools
+              tools={manualTools}
+              onToolsChange={setManualTools}
+              onNext={() => setStep(3)}
+              onBack={() => setStep(1)}
+            />
+          )}
+
+          {step === 3 && source === 'openapi' && parsedResult && (
             <Step3Name
               tools={parsedResult.tools}
               selectedIds={selectedIds}
@@ -730,6 +1077,19 @@ export default function NewServerPage() {
               serverDescription={serverDescription}
               onServerDescriptionChange={setServerDescription}
               onSubmit={handleSubmit}
+              onBack={() => setStep(2)}
+              isSubmitting={isSubmitting}
+            />
+          )}
+
+          {step === 3 && source === 'manual' && (
+            <Step3NameManual
+              manualTools={manualTools}
+              serverName={serverName}
+              onServerNameChange={setServerName}
+              serverDescription={serverDescription}
+              onServerDescriptionChange={setServerDescription}
+              onSubmit={handleSubmitManual}
               onBack={() => setStep(2)}
               isSubmitting={isSubmitting}
             />

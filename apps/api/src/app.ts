@@ -3,9 +3,10 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import pinoHttp from 'pino-http'
-import { prisma } from '@mcpbuilder/db'
 import { logger } from './lib/logger'
 import { errorHandler } from './middleware/errorHandler'
+import { ipRateLimiter, auditLogger, sanitizeInput, workspaceRateLimiter, mcpRateLimiter } from './middleware/security'
+import { mcpAuthMiddleware } from './middleware/mcp-auth'
 import authRouter from './routes/auth'
 import importRouter from './routes/import'
 import toolsRouter from './routes/tools'
@@ -27,6 +28,11 @@ app.use(
 app.use(express.json({ limit: '1mb' }))
 app.use(pinoHttp({ logger }))
 
+// Global security middleware (runs on every request except /mcp/*)
+app.use(ipRateLimiter)
+app.use(sanitizeInput)
+app.use(auditLogger)
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
@@ -38,42 +44,15 @@ app.get('/health', (_req, res) => {
 //   GET  /mcp/{serverId}/sse       → establish SSE connection
 //   POST /mcp/{serverId}/messages  → send MCP protocol messages
 //
-// This middleware:
-//   1. Validates the Bearer token against McpServer.apiKey in the DB
-//   2. Looks up the internal port from the RuntimeManager
-//   3. Proxies the request to the internal Express server
-//
-// Express body-parsing middleware runs before this, so POST bodies are already
-// parsed into req.body — we re-serialise them when forwarding.
+// Auth is delegated to mcpAuthMiddleware (Redis-cached API key validation + access log).
+// Rate limiting is applied per-server (60 req/min).
 
-app.use('/mcp/:serverId', async (req, res, next) => {
+app.use('/mcp/:serverId', mcpRateLimiter, mcpAuthMiddleware, async (req, res, next) => {
   try {
-    // 1. Validate Bearer token
-    const authHeader = req.headers['authorization']
-    if (!authHeader?.startsWith('Bearer ')) {
-      res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Missing or invalid Authorization header' },
-      })
-      return
-    }
-    const apiKey = authHeader.slice(7)
+    const serverId = req.params['serverId']!
 
-    const dbServer = await prisma.mcpServer.findUnique({
-      where: { apiKey },
-      select: { id: true, status: true },
-    })
-
-    if (!dbServer || dbServer.id !== req.params['serverId']) {
-      res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid API key' },
-      })
-      return
-    }
-
-    // 2. Resolve internal port
-    const port = runtimeManager.getPort(req.params['serverId']!)
+    // Resolve internal port
+    const port = runtimeManager.getPort(serverId)
     if (!port) {
       res.status(503).json({
         success: false,
@@ -82,14 +61,12 @@ app.use('/mcp/:serverId', async (req, res, next) => {
       return
     }
 
-    // 3. Build target path (strip /mcp/:serverId prefix, keep rest)
+    // Build target path (strip /mcp/:serverId prefix, keep the rest + query string)
     const targetPath =
       req.path +
-      (req.url.includes('?')
-        ? req.url.slice(req.url.indexOf('?'))
-        : '')
+      (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '')
 
-    // 4. Forward request to internal server
+    // Forward request to the internal runtime server
     const proxyOptions: http.RequestOptions = {
       hostname: '127.0.0.1',
       port,
@@ -104,11 +81,7 @@ app.use('/mcp/:serverId', async (req, res, next) => {
     const proxyReq = http.request(proxyOptions, (proxyRes) => {
       res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers)
       proxyRes.pipe(res)
-
-      // If the client disconnects (SSE session ends), tear down the proxy request
-      res.on('close', () => {
-        proxyReq.destroy()
-      })
+      res.on('close', () => proxyReq.destroy())
     })
 
     proxyReq.on('error', (err) => {
@@ -117,7 +90,7 @@ app.use('/mcp/:serverId', async (req, res, next) => {
       }
     })
 
-    // Forward body — Express has already parsed JSON into req.body, so re-serialise
+    // Re-serialise body (Express has already parsed it from JSON)
     if (['POST', 'PUT', 'PATCH'].includes(req.method ?? '') && req.body !== undefined) {
       const bodyStr = JSON.stringify(req.body)
       proxyReq.setHeader('Content-Type', 'application/json')
@@ -136,26 +109,23 @@ app.use('/mcp/:serverId', async (req, res, next) => {
 app.use('/api/v1/auth', authRouter)
 app.use('/api/v1/import', importRouter)
 
-// Workspace routes (GET /, GET /:id/stats)
-app.use('/api/v1/workspaces', workspaceRouter)
+// Workspace routes (GET /, GET /:id/stats) — rate-limited per workspace
+app.use('/api/v1/workspaces', workspaceRateLimiter, workspaceRouter)
 
 // Workspace-scoped server routes (POST /, GET /)
-app.use('/api/v1/workspaces/:workspaceId/servers', serversRouter)
+app.use('/api/v1/workspaces/:workspaceId/servers', workspaceRateLimiter, serversRouter)
 
 // Server-scoped routes (PUT, DELETE, GET /status, POST /restart, GET /logs, POST /rotate-key)
 app.use('/api/v1/servers', serversRouter)
 app.use('/api/v1/servers/:serverId/tools', toolsRouter)
 
 // Credentials
-app.use('/api/v1/workspaces/:workspaceId/credentials', credentialsRouter)
+app.use('/api/v1/workspaces/:workspaceId/credentials', workspaceRateLimiter, credentialsRouter)
 
 // ─── Error handler (must be last middleware) ──────────────────────────────────
 app.use(errorHandler)
 
-// ─── RuntimeManager bootstrap ────────────────────────────────────────────────
-//
-// Initialise after the Express app is built so logger is ready.
-// Errors are logged but do not prevent the API from starting.
+// ─── RuntimeManager bootstrap ─────────────────────────────────────────────────
 runtimeManager.init().catch((err: unknown) => {
   logger.error({ err }, 'RuntimeManager.init() failed')
 })

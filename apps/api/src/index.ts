@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import './config' // validates all required env vars — crashes with a clear message if any are missing
 import app from './app'
 import { logger } from './lib/logger'
 
