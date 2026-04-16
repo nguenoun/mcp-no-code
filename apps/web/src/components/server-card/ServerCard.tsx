@@ -21,6 +21,12 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { ServerWithMeta } from '@/hooks/use-servers'
 
@@ -150,6 +156,27 @@ export function ServerCard({
                   {server.name}
                 </Link>
                 <StatusBadge status={server.status} />
+                {server.runtimeMode === 'CLOUDFLARE' ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge
+                          variant="outline"
+                          className="text-xs px-1.5 py-0 border-orange-300 text-orange-600 cursor-default"
+                        >
+                          ☁️ Cloudflare
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Hébergé sur Cloudflare Workers — Edge global</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <Badge variant="outline" className="text-xs px-1.5 py-0 text-muted-foreground">
+                    💻 Local
+                  </Badge>
+                )}
               </div>
               {server.description && (
                 <p className="text-xs text-muted-foreground mt-1 line-clamp-2">

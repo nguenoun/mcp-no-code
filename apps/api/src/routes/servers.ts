@@ -6,6 +6,7 @@ import { generateApiKey } from '@mcpbuilder/mcp-runtime'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { runtimeManager } from '../services/runtime-manager'
+import { getCfDeployer, isCfConfigured, triggerCfRedeploy } from '../services/cloudflare-service'
 
 // ─── Shared query schemas ─────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ const router = Router({ mergeParams: true })
 const createServerSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
+  runtimeMode: z.enum(['LOCAL', 'CLOUDFLARE']).default('LOCAL'),
 })
 
 const updateServerSchema = z.object({
@@ -49,6 +51,22 @@ async function getServerForUser(serverId: string, userId: string) {
   if (!server) throw AppError.notFound('Server')
   return server
 }
+
+// ─── GET /api/v1/servers/runtime-config ──────────────────────────────────────
+//
+// Returns whether CF credentials are configured and the default runtime mode.
+// Must be defined before /:serverId routes to avoid being swallowed by the param.
+
+router.get('/runtime-config', authMiddleware, (_req, res) => {
+  const defaultMode = process.env['MCP_RUNTIME_MODE'] === 'cloudflare' ? 'CLOUDFLARE' : 'LOCAL'
+  res.json({
+    success: true,
+    data: {
+      cloudflareConfigured: isCfConfigured(),
+      defaultRuntimeMode: defaultMode,
+    },
+  })
+})
 
 // ─── GET /api/v1/workspaces/:workspaceId/servers ──────────────────────────────
 
@@ -91,21 +109,109 @@ router.post('/', authMiddleware, async (req, res, next) => {
       name: body.name,
       apiKey,
       status: 'STOPPED',
+      runtimeMode: body.runtimeMode,
       ...(body.description !== undefined && { description: body.description }),
     }
 
     const server = await prisma.mcpServer.create({ data: createData })
 
-    // Start the runtime in the background — don't block the response
-    runtimeManager.startServer(server.id).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err)
-      void prisma.mcpServer
-        .update({ where: { id: server.id }, data: { status: 'ERROR' } })
-        .catch(() => undefined)
-      console.error(`[RuntimeManager] Failed to start server ${server.id}: ${msg}`)
-    })
+    if (body.runtimeMode === 'CLOUDFLARE') {
+      // Cloudflare Workers have no tools yet at creation time — nothing to deploy
+      // The Worker will be deployed on first tool save.
+    } else {
+      // Start the local runtime in the background — don't block the response
+      runtimeManager.startServer(server.id).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        void prisma.mcpServer
+          .update({ where: { id: server.id }, data: { status: 'ERROR' } })
+          .catch(() => undefined)
+        console.error(`[RuntimeManager] Failed to start server ${server.id}: ${msg}`)
+      })
+    }
 
     res.status(201).json({ success: true, data: server } satisfies ApiResponse<typeof server>)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── GET /api/v1/servers/:serverId/deployment-status ─────────────────────────
+
+router.get('/:serverId/deployment-status', authMiddleware, async (req, res, next) => {
+  try {
+    const { serverId } = req.params
+    if (!serverId) { next(); return }
+
+    await getServerForUser(serverId, req.user.sub)
+
+    const dbServer = await prisma.mcpServer.findUnique({
+      where: { id: serverId },
+      select: { status: true, endpointUrl: true, runtimeMode: true },
+    })
+    if (!dbServer) throw AppError.notFound('Server')
+
+    if (dbServer.runtimeMode === 'CLOUDFLARE') {
+      const deployer = getCfDeployer()
+      const workerName = deployer?.getWorkerName(serverId) ?? null
+
+      // Worker API status
+      let workerApiStatus: string = 'unknown'
+      if (deployer) {
+        try {
+          workerApiStatus = await deployer.getWorkerStatus(serverId)
+        } catch {
+          workerApiStatus = 'error'
+        }
+      }
+
+      // HTTP health check against the Worker URL
+      let healthCheck: { ok: boolean; latencyMs: number; toolCount: number } | null = null
+      if (dbServer.endpointUrl) {
+        const startMs = Date.now()
+        try {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), 5_000)
+          const r = await fetch(`${dbServer.endpointUrl}/health`, { signal: controller.signal })
+          clearTimeout(timer)
+          const latencyMs = Date.now() - startMs
+          let toolCount = 0
+          if (r.ok) {
+            try {
+              const body = await r.json() as Record<string, unknown>
+              toolCount = typeof body['toolCount'] === 'number' ? body['toolCount'] : 0
+            } catch { /* non-JSON health response */ }
+          }
+          healthCheck = { ok: r.ok, latencyMs, toolCount }
+        } catch {
+          healthCheck = { ok: false, latencyMs: Date.now() - startMs, toolCount: 0 }
+        }
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          status: dbServer.status,
+          endpointUrl: dbServer.endpointUrl,
+          workerName,
+          workerApiStatus,
+          healthCheck,
+        },
+      })
+    }
+
+    // Local mode — return runtimeManager status
+    const runtimeInfo = runtimeManager.getStatusInfo(serverId)
+    return res.json({
+      success: true,
+      data: {
+        status: dbServer.status,
+        endpointUrl: dbServer.endpointUrl,
+        workerName: null,
+        workerApiStatus: null,
+        healthCheck: null,
+        ...runtimeInfo,
+      },
+    })
   } catch (err) {
     next(err)
   }
@@ -170,11 +276,15 @@ router.post('/:serverId/restart', authMiddleware, async (req, res, next) => {
     const { serverId } = req.params
     if (!serverId) { next(); return }
 
-    await getServerForUser(serverId, req.user.sub)
+    const server = await getServerForUser(serverId, req.user.sub)
 
-    const endpointUrl = await runtimeManager.restartServer(serverId)
-
-    res.json({ success: true, data: { serverId, endpointUrl } })
+    if (server.runtimeMode === 'CLOUDFLARE') {
+      triggerCfRedeploy(serverId)
+      res.json({ success: true, data: { serverId, endpointUrl: server.endpointUrl } })
+    } else {
+      const endpointUrl = await runtimeManager.restartServer(serverId)
+      res.json({ success: true, data: { serverId, endpointUrl } })
+    }
   } catch (err) {
     next(err)
   }
@@ -217,14 +327,23 @@ router.put('/:serverId', authMiddleware, async (req, res, next) => {
       include: { credential: { select: { id: true, name: true, type: true } } },
     })
 
-    // If server is running, restart it to pick up the config change
-    if (runtimeManager.getPort(serverId) !== null) {
-      runtimeManager.restartServer(serverId).catch((err: unknown) => {
-        console.error(`[RuntimeManager] Restart after update failed for ${serverId}: ${String(err)}`)
-      })
+    let redeployTriggered = false
+
+    if (updated.runtimeMode === 'CLOUDFLARE') {
+      if (updated.status === 'RUNNING') {
+        triggerCfRedeploy(serverId)
+        redeployTriggered = true
+      }
+    } else {
+      // Local mode — restart in-process runtime if running
+      if (runtimeManager.getPort(serverId) !== null) {
+        runtimeManager.restartServer(serverId).catch((err: unknown) => {
+          console.error(`[RuntimeManager] Restart after update failed for ${serverId}: ${String(err)}`)
+        })
+      }
     }
 
-    res.json({ success: true, data: updated } satisfies ApiResponse<typeof updated>)
+    res.json({ success: true, data: { ...updated, redeployTriggered } } satisfies ApiResponse<typeof updated & { redeployTriggered: boolean }>)
   } catch (err) {
     next(err)
   }

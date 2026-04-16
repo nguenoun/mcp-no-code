@@ -63,7 +63,7 @@ export function useCreateTool(serverId: string) {
 
   return useMutation({
     mutationFn: async (data: ToolFormData) => {
-      const res = await apiClient.post<ApiResponse<McpTool>>(
+      const res = await apiClient.post<ApiResponse<McpTool & { redeployTriggered?: boolean }>>(
         `/api/v1/servers/${serverId}/tools`,
         data,
       )
@@ -82,7 +82,7 @@ export function useUpdateTool(serverId: string, toolId: string) {
 
   return useMutation({
     mutationFn: async (data: Partial<ToolFormData>) => {
-      const res = await apiClient.put<ApiResponse<McpTool>>(
+      const res = await apiClient.put<ApiResponse<McpTool & { redeployTriggered?: boolean }>>(
         `/api/v1/servers/${serverId}/tools/${toolId}`,
         data,
       )

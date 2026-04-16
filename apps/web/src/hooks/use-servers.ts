@@ -14,6 +14,24 @@ export interface ServerWithMeta extends McpServer {
 export interface CreateServerData {
   name: string
   description?: string
+  runtimeMode?: 'LOCAL' | 'CLOUDFLARE'
+}
+
+export interface DeploymentStatusInfo {
+  status: string
+  endpointUrl: string | null
+  workerName: string | null
+  workerApiStatus: string | null
+  healthCheck: {
+    ok: boolean
+    latencyMs: number
+    toolCount: number
+  } | null
+}
+
+export interface RuntimeConfig {
+  cloudflareConfigured: boolean
+  defaultRuntimeMode: 'LOCAL' | 'CLOUDFLARE'
 }
 
 export interface UpdateServerData {
@@ -40,6 +58,7 @@ export const serverKeys = {
   list: (workspaceId: string) => ['servers', workspaceId, 'list'] as const,
   detail: (serverId: string) => ['servers', 'detail', serverId] as const,
   status: (serverId: string) => ['servers', 'status', serverId] as const,
+  deploymentStatus: (serverId: string) => ['servers', 'deployment-status', serverId] as const,
 }
 
 // ─── useServers ───────────────────────────────────────────────────────────────
@@ -180,6 +199,34 @@ export function useTestTool(serverId: string) {
         `/api/v1/servers/${serverId}/tools/${toolId}/test`,
         { args },
       )
+      return res.data.data
+    },
+  })
+}
+
+// ─── useDeploymentStatus ──────────────────────────────────────────────────────
+
+export function useDeploymentStatus(serverId: string | null, enabled = false) {
+  return useQuery({
+    queryKey: serverKeys.deploymentStatus(serverId ?? ''),
+    queryFn: async () => {
+      const res = await apiClient.get<ApiResponse<DeploymentStatusInfo>>(
+        `/api/v1/servers/${serverId}/deployment-status`,
+      )
+      return res.data.data
+    },
+    enabled: Boolean(serverId) && enabled,
+    refetchInterval: enabled ? 2_000 : false,
+  })
+}
+
+// ─── useRuntimeConfig ─────────────────────────────────────────────────────────
+
+export function useRuntimeConfig() {
+  return useQuery({
+    queryKey: ['runtime-config'],
+    queryFn: async () => {
+      const res = await apiClient.get<ApiResponse<RuntimeConfig>>('/api/v1/servers/runtime-config')
       return res.data.data
     },
   })

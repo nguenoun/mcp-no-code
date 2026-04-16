@@ -1,7 +1,6 @@
 'use client'
 
 import * as React from 'react'
-import { useSession } from 'next-auth/react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -42,6 +41,7 @@ import {
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { useDefaultWorkspace } from '@/hooks/use-workspace'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -413,18 +413,16 @@ function CredentialRow({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CredentialsPage() {
-  const { data: session } = useSession()
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
+  const { workspaceId, isLoading: isWorkspaceLoading } = useDefaultWorkspace()
+  const safeWorkspaceId = workspaceId ?? ''
 
-  // TODO: derive workspaceId from session / workspace context when available
-  // For now, read from the URL or a workspace store
-  const workspaceId = (session as { workspaceId?: string } | null)?.workspaceId ?? ''
-
-  const { data: credentials, isLoading } = useCredentials(workspaceId)
-  const deleteMutation = useDeleteCredential(workspaceId)
+  const { data: credentials, isLoading } = useCredentials(safeWorkspaceId)
+  const deleteMutation = useDeleteCredential(safeWorkspaceId)
 
   async function handleDelete(id: string) {
+    if (!workspaceId) return
     setDeletingId(id)
     try {
       await deleteMutation.mutateAsync(id)
@@ -443,7 +441,7 @@ export default function CredentialsPage() {
             Stockage chiffré (AES-256-GCM) — les valeurs ne sont jamais exposées en clair.
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
+        <Button onClick={() => setDialogOpen(true)} disabled={!workspaceId || isWorkspaceLoading}>
           <Plus className="mr-2 h-4 w-4" />
           Nouveau credential
         </Button>
@@ -480,7 +478,7 @@ export default function CredentialsPage() {
       <CreateCredentialDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        workspaceId={workspaceId}
+        workspaceId={safeWorkspaceId}
       />
     </div>
   )

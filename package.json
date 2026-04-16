@@ -14,7 +14,11 @@
     "db:generate": "turbo db:generate",
     "db:migrate": "cd packages/db && npx prisma migrate dev",
     "db:studio": "cd packages/db && npx prisma studio",
-    "db:push": "cd packages/db && npx prisma db push"
+    "db:push": "cd packages/db && npx prisma db push",
+    "cf:setup": "ts-node --project scripts/tsconfig.json scripts/cloudflare-setup.ts",
+    "cf:cleanup": "ts-node --project scripts/tsconfig.json scripts/cloudflare-cleanup.ts",
+    "cf:sync": "ts-node --project scripts/tsconfig.json scripts/cloudflare-sync.ts",
+    "cf:test-worker": "ts-node --project scripts/tsconfig.json scripts/cloudflare-test-worker.ts"
   },
   "devDependencies": {
     "@types/node": "^20.12.0",

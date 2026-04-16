@@ -13,6 +13,8 @@ import toolsRouter from './routes/tools'
 import credentialsRouter from './routes/credentials'
 import serversRouter from './routes/servers'
 import workspaceRouter from './routes/workspace'
+import templatesRouter from './routes/templates'
+import internalRouter from './routes/internal'
 import { runtimeManager } from './services/runtime-manager'
 
 const app = express()
@@ -114,13 +116,20 @@ app.use('/api/v1/workspaces', workspaceRateLimiter, workspaceRouter)
 
 // Workspace-scoped server routes (POST /, GET /)
 app.use('/api/v1/workspaces/:workspaceId/servers', workspaceRateLimiter, serversRouter)
+app.use('/api/v1/workspaces/:workspaceId/servers', workspaceRateLimiter, templatesRouter)
+app.use('/api/workspaces/:workspaceId/servers', workspaceRateLimiter, templatesRouter)
 
 // Server-scoped routes (PUT, DELETE, GET /status, POST /restart, GET /logs, POST /rotate-key)
 app.use('/api/v1/servers', serversRouter)
 app.use('/api/v1/servers/:serverId/tools', toolsRouter)
+app.use('/api/v1/templates', templatesRouter)
+app.use('/api/templates', templatesRouter)
 
 // Credentials
 app.use('/api/v1/workspaces/:workspaceId/credentials', workspaceRateLimiter, credentialsRouter)
+
+// Internal machine-to-machine routes (Cloudflare Worker → API)
+app.use('/api/internal', internalRouter)
 
 // ─── Error handler (must be last middleware) ──────────────────────────────────
 app.use(errorHandler)

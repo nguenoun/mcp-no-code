@@ -34,6 +34,10 @@ const refreshSchema = z.object({
   refreshToken: z.string().uuid(),
 })
 
+const patchMeSchema = z.object({
+  hasCompletedOnboarding: z.boolean().optional(),
+})
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildSlug(name: string): string {
@@ -162,6 +166,7 @@ router.get('/me', authMiddleware, async (req, res, next) => {
         name: true,
         googleId: true,
         plan: true,
+        hasCompletedOnboarding: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -169,6 +174,37 @@ router.get('/me', authMiddleware, async (req, res, next) => {
     if (!user) throw AppError.notFound('User')
 
     res.json({ success: true, data: user } satisfies ApiResponse<typeof user>)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── PATCH /me ────────────────────────────────────────────────────────────────
+
+router.patch('/me', authMiddleware, async (req, res, next) => {
+  try {
+    const body = patchMeSchema.parse(req.body)
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.sub },
+      data: {
+        ...(body.hasCompletedOnboarding !== undefined && {
+          hasCompletedOnboarding: body.hasCompletedOnboarding,
+        }),
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        googleId: true,
+        plan: true,
+        hasCompletedOnboarding: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    })
+
+    res.json({ success: true, data: updatedUser } satisfies ApiResponse<typeof updatedUser>)
   } catch (err) {
     next(err)
   }

@@ -1,4 +1,5 @@
 export * from './types/models'
 export * from './types/api'
 export * from './types/openapi'
+export * from './types/templates'
 export * from './constants/index'

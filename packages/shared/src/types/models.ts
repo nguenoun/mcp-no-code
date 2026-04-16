@@ -24,6 +24,11 @@ export enum CallStatus {
   ERROR = 'ERROR',
 }
 
+export enum RuntimeMode {
+  LOCAL = 'LOCAL',
+  CLOUDFLARE = 'CLOUDFLARE',
+}
+
 // ─── Model types (safe for API responses — no sensitive fields) ───────────────
 
 export interface User {
@@ -32,6 +37,7 @@ export interface User {
   name: string | null
   googleId: string | null
   plan: Plan
+  hasCompletedOnboarding: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -50,6 +56,7 @@ export interface McpServer {
   name: string
   description: string | null
   status: ServerStatus
+  runtimeMode: RuntimeMode
   endpointUrl: string | null
   apiKey: string
   createdAt: Date

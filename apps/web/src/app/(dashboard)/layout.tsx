@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { getServerSession } from 'next-auth'
-import { LayoutDashboard, Server, KeyRound } from 'lucide-react'
+import { LayoutDashboard, Server, KeyRound, LayoutTemplate } from 'lucide-react'
 import { authOptions } from '@/lib/auth'
 import { SignOutButton } from '@/components/sign-out-button'
 
 const NAV_ITEMS = [
   { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/servers/new', icon: Server, label: 'Serveurs' },
+  { href: '/templates', icon: LayoutTemplate, label: 'Templates' },
   { href: '/workspace/credentials', icon: KeyRound, label: 'Credentials' },
 ]
 

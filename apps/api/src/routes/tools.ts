@@ -5,6 +5,7 @@ import type { ApiResponse } from '@mcpbuilder/shared'
 import { decrypt, getMasterKey } from '@mcpbuilder/mcp-runtime'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
+import { triggerCfRedeploy } from '../services/cloudflare-service'
 
 const router = Router({ mergeParams: true })
 
@@ -168,7 +169,20 @@ router.post('/', authMiddleware, async (req, res, next) => {
       },
     })
 
-    res.status(201).json({ success: true, data: tool } satisfies ApiResponse<typeof tool>)
+    // Reload the server after tool creation to get fresh status + runtimeMode
+    const freshServer = await prisma.mcpServer.findUnique({
+      where: { id: serverId },
+      select: { status: true, runtimeMode: true },
+    })
+    let redeployTriggered = false
+    // Deploy on first tool add (STOPPED) and on subsequent updates (RUNNING).
+    // Skip only when the server is in a permanent ERROR state.
+    if (freshServer?.runtimeMode === 'CLOUDFLARE' && freshServer.status !== 'ERROR') {
+      triggerCfRedeploy(serverId)
+      redeployTriggered = true
+    }
+
+    res.status(201).json({ success: true, data: { ...tool, redeployTriggered } } satisfies ApiResponse<typeof tool & { redeployTriggered: boolean }>)
   } catch (err) {
     next(err)
   }
@@ -214,7 +228,17 @@ router.put('/:toolId', authMiddleware, async (req, res, next) => {
       },
     })
 
-    res.json({ success: true, data: updated } satisfies ApiResponse<typeof updated>)
+    const freshServer = await prisma.mcpServer.findUnique({
+      where: { id: serverId },
+      select: { status: true, runtimeMode: true },
+    })
+    let redeployTriggered = false
+    if (freshServer?.runtimeMode === 'CLOUDFLARE' && freshServer.status !== 'ERROR') {
+      triggerCfRedeploy(serverId)
+      redeployTriggered = true
+    }
+
+    res.json({ success: true, data: { ...updated, redeployTriggered } } satisfies ApiResponse<typeof updated & { redeployTriggered: boolean }>)
   } catch (err) {
     next(err)
   }

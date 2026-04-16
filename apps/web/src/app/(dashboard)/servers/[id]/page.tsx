@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import {
   ArrowLeft, Copy, Check, RefreshCw, RotateCcw, Play,
   Loader2, AlertCircle, CheckCircle2, Clock, ChevronLeft, ChevronRight, Plus,
+  Zap, Globe,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +25,13 @@ import {
 } from '@/components/ui/select'
 import { ToolCard } from '@/components/tool-editor/ToolCard'
 import { ToolEditorModal } from '@/components/tool-editor/ToolEditorModal'
+import { RedeployNotification } from '@/components/redeploy-notification/RedeployNotification'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api-client'
 import { useDefaultWorkspace } from '@/hooks/use-workspace'
@@ -91,7 +99,13 @@ function StatusBadge({ status }: { status: string }) {
 
 // ─── Tab: Tools ───────────────────────────────────────────────────────────────
 
-function ToolsTab({ serverId }: { serverId: string }) {
+function ToolsTab({
+  serverId,
+  onRedeployTriggered,
+}: {
+  serverId: string
+  onRedeployTriggered?: () => void
+}) {
   const [page, setPage] = React.useState(1)
   const [modalOpen, setModalOpen] = React.useState(false)
   const [editingTool, setEditingTool] = React.useState<McpTool | undefined>()
@@ -114,12 +128,16 @@ function ToolsTab({ serverId }: { serverId: string }) {
   }
 
   const handleSave = async (formData: ToolFormData) => {
+    let result: { redeployTriggered?: boolean }
     if (editingTool) {
-      await updateTool.mutateAsync(formData)
+      result = await updateTool.mutateAsync(formData)
     } else {
-      await createTool.mutateAsync(formData)
+      result = await createTool.mutateAsync(formData)
     }
     setModalOpen(false)
+    if (result.redeployTriggered) {
+      onRedeployTriggered?.()
+    }
   }
 
   const tools = data?.tools ?? []
@@ -353,10 +371,24 @@ function TesterTab({ serverId }: { serverId: string }) {
 
 // ─── Tab: Connexion ───────────────────────────────────────────────────────────
 
-function ConnexionTab({ serverId, apiKey, endpointUrl }: { serverId: string; apiKey: string; endpointUrl: string | null }) {
+function ConnexionTab({
+  serverId,
+  apiKey,
+  endpointUrl,
+  runtimeMode,
+  serverName,
+}: {
+  serverId: string
+  apiKey: string
+  endpointUrl: string | null
+  runtimeMode: string
+  serverName: string
+}) {
   const rotateKey = useRotateApiKey()
   const [revealedKey, setRevealedKey] = React.useState<string | null>(null)
   const [rotateConfirm, setRotateConfirm] = React.useState(false)
+  const [healthResult, setHealthResult] = React.useState<{ ok: boolean; latencyMs: number } | null>(null)
+  const [healthLoading, setHealthLoading] = React.useState(false)
 
   const displayKey = revealedKey ?? apiKey
   const maskedKey = `${displayKey.slice(0, 8)}${'•'.repeat(Math.max(0, displayKey.length - 16))}${displayKey.slice(-8)}`
@@ -367,8 +399,34 @@ function ConnexionTab({ serverId, apiKey, endpointUrl }: { serverId: string; api
     setRotateConfirm(false)
   }
 
+  const handleHealthCheck = async () => {
+    if (!endpointUrl) return
+    setHealthLoading(true)
+    setHealthResult(null)
+    const startMs = Date.now()
+    try {
+      const r = await fetch(`${endpointUrl}/health`)
+      setHealthResult({ ok: r.ok, latencyMs: Date.now() - startMs })
+    } catch {
+      setHealthResult({ ok: false, latencyMs: Date.now() - startMs })
+    } finally {
+      setHealthLoading(false)
+    }
+  }
+
+  const isCloudflare = runtimeMode === 'CLOUDFLARE'
+  const mcpUrl = endpointUrl ? `${endpointUrl}/mcp` : null
   const sseUrl = endpointUrl ? `${endpointUrl}/sse` : null
-  const snippet = sseUrl
+
+  const cfClaudeDesktopSnippet = mcpUrl
+    ? `{\n  "mcpServers": {\n    "${serverName}": {\n      "url": "${mcpUrl}",\n      "headers": {\n        "Authorization": "Bearer ${displayKey}"\n      }\n    }\n  }\n}`
+    : ''
+
+  const cfCursorSnippet = mcpUrl
+    ? `{\n  "mcpServers": {\n    "${serverName}": {\n      "url": "${mcpUrl}",\n      "headers": {\n        "Authorization": "Bearer ${displayKey}"\n      }\n    }\n  }\n}`
+    : ''
+
+  const localSnippet = sseUrl
     ? `// Claude Desktop config (claude_desktop_config.json)\n{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "@mcpbuilder/client"],\n      "env": {\n        "MCP_URL": "${sseUrl}",\n        "MCP_API_KEY": "${displayKey}"\n      }\n    }\n  }\n}`
     : ''
 
@@ -437,14 +495,82 @@ function ConnexionTab({ serverId, apiKey, endpointUrl }: { serverId: string; api
 
       {/* Endpoint */}
       {endpointUrl ? (
-        <div className="space-y-2">
-          <Label>URL du endpoint SSE</Label>
-          <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
-            <code className="flex-1 text-xs font-mono truncate text-muted-foreground">
-              {sseUrl}
-            </code>
-            <CopyButton value={sseUrl!} />
-          </div>
+        <div className="space-y-3">
+          {isCloudflare ? (
+            <>
+              <div className="flex items-center gap-2">
+                <Label>URL Workers</Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 text-xs font-medium px-2 py-0.5 cursor-default">
+                        <Zap className="h-3 w-3" />
+                        Edge
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Servi depuis le réseau edge Cloudflare — 200+ localisations mondiales</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                <code className="flex-1 text-xs font-mono truncate text-muted-foreground">
+                  {mcpUrl}
+                </code>
+                <CopyButton value={mcpUrl!} />
+              </div>
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Globe className="h-3 w-3 shrink-0" />
+                Votre serveur MCP est hébergé sur le réseau edge Cloudflare (200+ localisations mondiales)
+              </p>
+
+              {/* Health check */}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={handleHealthCheck}
+                  disabled={healthLoading}
+                >
+                  {healthLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Zap className="h-3.5 w-3.5 mr-1.5" />
+                  )}
+                  Tester la connexion
+                </Button>
+                {healthResult && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
+                      healthResult.ok
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-red-100 text-red-700',
+                    )}
+                  >
+                    {healthResult.ok ? (
+                      <CheckCircle2 className="h-3 w-3" />
+                    ) : (
+                      <AlertCircle className="h-3 w-3" />
+                    )}
+                    {healthResult.ok ? `OK — ${healthResult.latencyMs}ms` : `Échec — ${healthResult.latencyMs}ms`}
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <Label>URL du endpoint SSE</Label>
+              <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                <code className="flex-1 text-xs font-mono truncate text-muted-foreground">
+                  {sseUrl}
+                </code>
+                <CopyButton value={sseUrl!} />
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
@@ -455,19 +581,44 @@ function ConnexionTab({ serverId, apiKey, endpointUrl }: { serverId: string; api
       <Separator />
 
       {/* Snippet */}
-      {snippet && (
+      {isCloudflare && cfClaudeDesktopSnippet ? (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Claude Desktop</Label>
+            <div className="relative">
+              <ScrollArea className="max-h-[200px]">
+                <pre className="rounded-md bg-muted px-4 py-3 text-xs font-mono whitespace-pre">
+                  {cfClaudeDesktopSnippet}
+                </pre>
+              </ScrollArea>
+              <CopyButton value={cfClaudeDesktopSnippet} className="absolute top-2 right-2 bg-background/80" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Cursor</Label>
+            <div className="relative">
+              <ScrollArea className="max-h-[200px]">
+                <pre className="rounded-md bg-muted px-4 py-3 text-xs font-mono whitespace-pre">
+                  {cfCursorSnippet}
+                </pre>
+              </ScrollArea>
+              <CopyButton value={cfCursorSnippet} className="absolute top-2 right-2 bg-background/80" />
+            </div>
+          </div>
+        </div>
+      ) : localSnippet ? (
         <div className="space-y-2">
           <Label>Exemple de configuration</Label>
           <div className="relative">
             <ScrollArea className="max-h-[200px]">
               <pre className="rounded-md bg-muted px-4 py-3 text-xs font-mono whitespace-pre">
-                {snippet}
+                {localSnippet}
               </pre>
             </ScrollArea>
-            <CopyButton value={snippet} className="absolute top-2 right-2 bg-background/80" />
+            <CopyButton value={localSnippet} className="absolute top-2 right-2 bg-background/80" />
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -605,8 +756,11 @@ export default function ServerDetailPage() {
   })
   const restartServer = useRestartServer(workspaceId ?? '')
 
+  const [redeployVisible, setRedeployVisible] = React.useState(false)
+
   const apiKey = serverDetail?.apiKey ?? null
   const serverName = serverDetail?.name ?? (statusLoading ? 'Chargement…' : `Serveur ${serverId.slice(0, 8)}`)
+  const runtimeMode = serverDetail?.runtimeMode ?? 'LOCAL'
 
   return (
     <div className="space-y-6">
@@ -657,7 +811,10 @@ export default function ServerDetailPage() {
         </TabsList>
 
         <TabsContent value="tools" className="mt-6">
-          <ToolsTab serverId={serverId} />
+          <ToolsTab
+            serverId={serverId}
+            onRedeployTriggered={() => setRedeployVisible(true)}
+          />
         </TabsContent>
 
         <TabsContent value="tester" className="mt-6">
@@ -669,6 +826,8 @@ export default function ServerDetailPage() {
             serverId={serverId}
             apiKey={apiKey ?? '•'.repeat(32)}
             endpointUrl={status?.endpointUrl ?? null}
+            runtimeMode={runtimeMode}
+            serverName={serverName}
           />
         </TabsContent>
 
@@ -676,6 +835,13 @@ export default function ServerDetailPage() {
           <LogsTab serverId={serverId} />
         </TabsContent>
       </Tabs>
+
+      {/* Cloudflare redeploy notification */}
+      <RedeployNotification
+        serverId={serverId}
+        visible={redeployVisible}
+        onDismiss={() => setRedeployVisible(false)}
+      />
     </div>
   )
 }

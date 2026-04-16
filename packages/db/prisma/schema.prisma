@@ -36,6 +36,11 @@ enum CallStatus {
   ERROR
 }
 
+enum RuntimeMode {
+  LOCAL
+  CLOUDFLARE
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
@@ -45,6 +50,7 @@ model User {
   passwordHash String?
   googleId     String?     @unique
   plan         Plan        @default(FREE)
+  hasCompletedOnboarding Boolean @default(false)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
@@ -74,6 +80,7 @@ model McpServer {
   name         String
   description  String?
   status       ServerStatus @default(STOPPED)
+  runtimeMode  RuntimeMode  @default(LOCAL)
   endpointUrl  String?
   apiKey       String       @unique @default(cuid())
   credentialId String?

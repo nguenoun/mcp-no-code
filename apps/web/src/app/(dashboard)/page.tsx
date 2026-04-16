@@ -1,6 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useEffect } from 'react'
 import { Plus, Activity, Zap, AlertTriangle, Clock, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { ServerCard } from '@/components/server-card/ServerCard'
 import { useDefaultWorkspace, useWorkspaceStats } from '@/hooks/use-workspace'
 import { useServers, useRestartServer, useDeleteServer } from '@/hooks/use-servers'
+import { useMe } from '@/hooks/use-me'
 import { cn } from '@/lib/utils'
 import type { CallLog } from '@mcpbuilder/shared'
 
@@ -84,13 +87,21 @@ function RecentActivity({ logs }: { logs: CallLog[] }) {
 // ─── Dashboard page ───────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { workspaceId, isLoading: workspaceLoading } = useDefaultWorkspace()
+  const { data: me } = useMe()
   const { data: stats, isLoading: statsLoading } = useWorkspaceStats(workspaceId)
   const { data: servers, isLoading: serversLoading } = useServers(workspaceId)
   const restartServer = useRestartServer(workspaceId ?? '')
   const deleteServer = useDeleteServer(workspaceId ?? '')
 
   const isLoading = workspaceLoading || statsLoading
+
+  useEffect(() => {
+    if (me && servers && !me.hasCompletedOnboarding && servers.length === 0) {
+      router.replace('/onboarding')
+    }
+  }, [me, servers, router])
 
   return (
     <div className="space-y-8">

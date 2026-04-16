@@ -1,8 +1,9 @@
 'use client'
 
+import * as React from 'react'
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle, Plus, Trash2 } from 'lucide-react'
+import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle, Plus, Trash2, Cloud, Monitor } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -18,7 +19,7 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useImportFromUrl, useImportFromContent } from '@/hooks/use-import'
 import { useDefaultWorkspace } from '@/hooks/use-workspace'
-import { useCreateServer } from '@/hooks/use-servers'
+import { useCreateServer, useRuntimeConfig } from '@/hooks/use-servers'
 import { apiClient } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 import type { ParsedOpenAPIResult, ParsedTool } from '@mcpbuilder/shared'
@@ -61,6 +62,97 @@ function MethodBadge({ method }: { method: string }) {
     <Badge variant={(variants[lower] ?? 'secondary') as HttpVariant} className="font-mono text-xs uppercase w-16 justify-center">
       {method}
     </Badge>
+  )
+}
+
+// ─── RuntimeModeSelector ─────────────────────────────────────────────────────
+
+type RuntimeMode = 'LOCAL' | 'CLOUDFLARE'
+
+function RuntimeModeSelector({
+  value,
+  onChange,
+  cloudflareConfigured,
+}: {
+  value: RuntimeMode
+  onChange: (v: RuntimeMode) => void
+  cloudflareConfigured: boolean
+}) {
+  const options: Array<{
+    mode: RuntimeMode
+    icon: React.ReactNode
+    label: string
+    desc: string
+    badge?: string
+  }> = [
+    {
+      mode: 'CLOUDFLARE',
+      icon: <Cloud className="h-5 w-5" />,
+      label: '☁️ Cloudflare Workers',
+      desc: 'Hébergé sur le réseau edge global Cloudflare, disponible en quelques secondes',
+      badge: 'Recommandé',
+    },
+    {
+      mode: 'LOCAL',
+      icon: <Monitor className="h-5 w-5" />,
+      label: '💻 Local',
+      desc: 'Hébergé sur nos serveurs, pour le développement',
+    },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <Label>Mode d&apos;hébergement</Label>
+      <div className="grid grid-cols-1 gap-2">
+        {options.map((opt) => (
+          <label
+            key={opt.mode}
+            htmlFor={`runtime-${opt.mode}`}
+            className={cn(
+              'flex cursor-pointer items-center gap-4 rounded-lg border p-4 transition-colors',
+              value === opt.mode
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:border-primary/40',
+            )}
+          >
+            <RadioGroup value={value} onValueChange={(v) => onChange(v as RuntimeMode)}>
+              <RadioGroupItem value={opt.mode} id={`runtime-${opt.mode}`} className="shrink-0" />
+            </RadioGroup>
+            <div className={cn('text-muted-foreground', value === opt.mode && 'text-primary')}>
+              {opt.icon}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <div className="font-medium text-sm">{opt.label}</div>
+                {opt.badge && (
+                  <span className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5 font-medium">
+                    {opt.badge}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground">{opt.desc}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {value === 'CLOUDFLARE' && !cloudflareConfigured && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-amber-500" />
+          <div>
+            Les credentials Cloudflare ne sont pas configurés.{' '}
+            <a
+              href="https://developers.cloudflare.com/workers/get-started/guide/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-medium"
+            >
+              Voir la documentation de configuration
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -312,8 +404,9 @@ function Step1Source({
       )}
 
       {source === 'template' && (
-        <Button className="w-full" disabled>
-          Bientôt disponible
+        <Button className="w-full" onClick={onNext}>
+          Voir les templates
+          <ChevronRight className="h-4 w-4 ml-2" />
         </Button>
       )}
     </div>
@@ -643,6 +736,9 @@ function Step3Name({
   onServerNameChange,
   serverDescription,
   onServerDescriptionChange,
+  runtimeMode,
+  onRuntimeModeChange,
+  cloudflareConfigured,
   onSubmit,
   onBack,
   isSubmitting,
@@ -655,6 +751,9 @@ function Step3Name({
   onServerNameChange: (v: string) => void
   serverDescription: string
   onServerDescriptionChange: (v: string) => void
+  runtimeMode: RuntimeMode
+  onRuntimeModeChange: (v: RuntimeMode) => void
+  cloudflareConfigured: boolean
   onSubmit: () => void
   onBack: () => void
   isSubmitting: boolean
@@ -690,6 +789,12 @@ function Step3Name({
             className="min-h-[80px]"
           />
         </div>
+
+        <RuntimeModeSelector
+          value={runtimeMode}
+          onChange={onRuntimeModeChange}
+          cloudflareConfigured={cloudflareConfigured}
+        />
       </div>
 
       <Separator />
@@ -749,6 +854,9 @@ function Step3NameManual({
   onServerNameChange,
   serverDescription,
   onServerDescriptionChange,
+  runtimeMode,
+  onRuntimeModeChange,
+  cloudflareConfigured,
   onSubmit,
   onBack,
   isSubmitting,
@@ -758,6 +866,9 @@ function Step3NameManual({
   onServerNameChange: (v: string) => void
   serverDescription: string
   onServerDescriptionChange: (v: string) => void
+  runtimeMode: RuntimeMode
+  onRuntimeModeChange: (v: RuntimeMode) => void
+  cloudflareConfigured: boolean
   onSubmit: () => void
   onBack: () => void
   isSubmitting: boolean
@@ -788,6 +899,12 @@ function Step3NameManual({
             className="min-h-[80px]"
           />
         </div>
+
+        <RuntimeModeSelector
+          value={runtimeMode}
+          onChange={onRuntimeModeChange}
+          cloudflareConfigured={cloudflareConfigured}
+        />
       </div>
 
       <Separator />
@@ -860,11 +977,20 @@ export default function NewServerPage() {
 
   const [serverName, setServerName] = useState('')
   const [serverDescription, setServerDescription] = useState('')
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('LOCAL')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const importFromUrl = useImportFromUrl()
   const importFromContent = useImportFromContent()
   const createServer = useCreateServer(workspaceId ?? '')
+  const { data: runtimeConfig } = useRuntimeConfig()
+
+  // Pre-select the default mode from server config
+  React.useEffect(() => {
+    if (runtimeConfig) {
+      setRuntimeMode(runtimeConfig.defaultRuntimeMode)
+    }
+  }, [runtimeConfig])
 
   const isLoading = importFromUrl.isPending || importFromContent.isPending
 
@@ -937,6 +1063,7 @@ export default function NewServerPage() {
     try {
       const server = await createServer.mutateAsync({
         name: serverName,
+        runtimeMode,
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
 
@@ -962,7 +1089,7 @@ export default function NewServerPage() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [parsedResult, selectedIds, edits, serverName, serverDescription, workspaceId, router, createServer])
+  }, [parsedResult, selectedIds, edits, serverName, serverDescription, runtimeMode, workspaceId, router, createServer])
 
   // ─── Submit (Manual) ──────────────────────────────────────────────────────────
 
@@ -972,6 +1099,7 @@ export default function NewServerPage() {
     try {
       const server = await createServer.mutateAsync({
         name: serverName,
+        runtimeMode,
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
 
@@ -993,7 +1121,7 @@ export default function NewServerPage() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [manualTools, serverName, serverDescription, workspaceId, router, createServer])
+  }, [manualTools, serverName, serverDescription, runtimeMode, workspaceId, router, createServer])
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -1033,7 +1161,7 @@ export default function NewServerPage() {
               onAnalyze={handleAnalyze}
               isLoading={isLoading}
               error={parseError}
-              onNext={() => setStep(2)}
+              onNext={() => source === 'template' ? router.push('/templates') : setStep(2)}
               hasParsed={!!parsedResult}
             />
           )}
@@ -1076,6 +1204,9 @@ export default function NewServerPage() {
               onServerNameChange={setServerName}
               serverDescription={serverDescription}
               onServerDescriptionChange={setServerDescription}
+              runtimeMode={runtimeMode}
+              onRuntimeModeChange={setRuntimeMode}
+              cloudflareConfigured={runtimeConfig?.cloudflareConfigured ?? false}
               onSubmit={handleSubmit}
               onBack={() => setStep(2)}
               isSubmitting={isSubmitting}
@@ -1089,6 +1220,9 @@ export default function NewServerPage() {
               onServerNameChange={setServerName}
               serverDescription={serverDescription}
               onServerDescriptionChange={setServerDescription}
+              runtimeMode={runtimeMode}
+              onRuntimeModeChange={setRuntimeMode}
+              cloudflareConfigured={runtimeConfig?.cloudflareConfigured ?? false}
               onSubmit={handleSubmitManual}
               onBack={() => setStep(2)}
               isSubmitting={isSubmitting}
