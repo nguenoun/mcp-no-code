@@ -1079,8 +1079,10 @@ export default function NewServerPage() {
         isEnabled: true,
       }))
 
-      for (const payload of toolPayloads) {
-        await apiClient.post(`/api/v1/servers/${server.id}/tools`, payload)
+      for (let i = 0; i < toolPayloads.length; i++) {
+        const isLast = i === toolPayloads.length - 1
+        const url = `/api/v1/servers/${server.id}/tools${isLast ? '' : '?skipDeploy=true'}`
+        await apiClient.post(url, toolPayloads[i])
       }
 
       router.push(`/servers/${server.id}`)
@@ -1103,12 +1105,14 @@ export default function NewServerPage() {
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
 
-      for (const tool of manualTools) {
-        await apiClient.post(`/api/v1/servers/${server.id}/tools`, {
-          name: tool.name,
-          description: tool.description,
-          httpMethod: tool.httpMethod,
-          httpUrl: tool.httpUrl,
+      for (let i = 0; i < manualTools.length; i++) {
+        const isLast = i === manualTools.length - 1
+        const url = `/api/v1/servers/${server.id}/tools${isLast ? '' : '?skipDeploy=true'}`
+        await apiClient.post(url, {
+          name: manualTools[i]!.name,
+          description: manualTools[i]!.description,
+          httpMethod: manualTools[i]!.httpMethod,
+          httpUrl: manualTools[i]!.httpUrl,
           parametersSchema: {},
           headersConfig: [],
           isEnabled: true,

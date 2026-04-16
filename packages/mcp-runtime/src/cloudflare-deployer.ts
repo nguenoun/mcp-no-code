@@ -213,6 +213,10 @@ export class CloudflareDeployer {
       await this.setWorkerSecret(workerName, 'MCP_API_KEY', apiKey)
       if (config.credential?.encryptedValue) {
         await this.setWorkerSecret(workerName, 'CREDENTIAL', config.credential.encryptedValue)
+        const encryptionKey = process.env['ENCRYPTION_KEY']
+        if (encryptionKey) {
+          await this.setWorkerSecret(workerName, 'ENCRYPTION_KEY', encryptionKey)
+        }
       }
 
       const internalSecret = process.env['INTERNAL_SECRET']

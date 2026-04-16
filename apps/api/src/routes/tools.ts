@@ -169,15 +169,16 @@ router.post('/', authMiddleware, async (req, res, next) => {
       },
     })
 
-    // Reload the server after tool creation to get fresh status + runtimeMode
+    // skipDeploy=true lets callers batch-create tools and trigger a single
+    // deploy themselves at the end (avoids N Worker versions for N tools).
+    const skipDeploy = req.query['skipDeploy'] === 'true'
+
     const freshServer = await prisma.mcpServer.findUnique({
       where: { id: serverId },
       select: { status: true, runtimeMode: true },
     })
     let redeployTriggered = false
-    // Deploy on first tool add (STOPPED) and on subsequent updates (RUNNING).
-    // Skip only when the server is in a permanent ERROR state.
-    if (freshServer?.runtimeMode === 'CLOUDFLARE' && freshServer.status !== 'ERROR') {
+    if (!skipDeploy && freshServer?.runtimeMode === 'CLOUDFLARE' && freshServer.status !== 'ERROR') {
       triggerCfRedeploy(serverId)
       redeployTriggered = true
     }

@@ -3,14 +3,13 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
-import { Plus, Activity, Zap, AlertTriangle, Clock, Loader2 } from 'lucide-react'
+import { Plus, Activity, Zap, AlertTriangle, Clock, Loader2, Server, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
-import { ServerCard } from '@/components/server-card/ServerCard'
 import { useDefaultWorkspace, useWorkspaceStats } from '@/hooks/use-workspace'
-import { useServers, useRestartServer, useDeleteServer } from '@/hooks/use-servers'
+import { useServers } from '@/hooks/use-servers'
 import { useMe } from '@/hooks/use-me'
 import { cn } from '@/lib/utils'
 import type { CallLog } from '@mcpbuilder/shared'
@@ -92,8 +91,6 @@ export default function DashboardPage() {
   const { data: me } = useMe()
   const { data: stats, isLoading: statsLoading } = useWorkspaceStats(workspaceId)
   const { data: servers, isLoading: serversLoading } = useServers(workspaceId)
-  const restartServer = useRestartServer(workspaceId ?? '')
-  const deleteServer = useDeleteServer(workspaceId ?? '')
 
   const isLoading = workspaceLoading || statsLoading
 
@@ -102,6 +99,9 @@ export default function DashboardPage() {
       router.replace('/onboarding')
     }
   }, [me, servers, router])
+
+  const serverCount = servers?.length ?? 0
+  const runningCount = servers?.filter((s) => s.status === 'RUNNING').length ?? 0
 
   return (
     <div className="space-y-8">
@@ -151,79 +151,70 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* ── Servers grid ──────────────────────────────────────────────────────── */}
+      {/* ── Servers summary card ───────────────────────────────────────────────── */}
       <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Vos serveurs MCP</h2>
-          {servers && servers.length > 0 && (
-            <span className="text-sm text-muted-foreground">{servers.length} serveur{servers.length !== 1 ? 's' : ''}</span>
-          )}
-        </div>
-
-        {serversLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {[1, 2, 3].map((i) => (
-              <Card key={i}>
-                <CardHeader className="pb-3">
-                  <Skeleton className="h-5 w-40" />
-                  <Skeleton className="h-3 w-64 mt-2" />
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className="h-8 w-full" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : servers && servers.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {servers.map((server) => (
-              <ServerCard
-                key={server.id}
-                server={server}
-                onRestart={(id) => restartServer.mutate(id)}
-                onDelete={(id) => deleteServer.mutate(id)}
-                isRestarting={restartServer.isPending && restartServer.variables === server.id}
-                isDeleting={deleteServer.isPending && deleteServer.variables === server.id}
-              />
-            ))}
-          </div>
-        ) : (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Activity className="h-10 w-10 text-muted-foreground/40 mb-4" />
-              <p className="font-medium text-sm">Aucun serveur MCP</p>
-              <p className="text-xs text-muted-foreground mt-1 mb-4">
-                Créez votre premier serveur MCP pour commencer.
-              </p>
-              <Button asChild size="sm">
-                <Link href="/servers/new">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Créer un serveur
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardContent className="flex items-center justify-between py-5 px-6">
+            {serversLoading ? (
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-9 w-9 rounded-md" />
+                <div className="space-y-1.5">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-3 w-48" />
+                </div>
+              </div>
+            ) : serverCount === 0 ? (
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-md bg-muted flex items-center justify-center shrink-0">
+                  <Server className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Aucun serveur</p>
+                  <p className="text-xs text-muted-foreground">
+                    Créez votre premier serveur MCP pour commencer.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-md bg-emerald-500/10 flex items-center justify-center shrink-0">
+                  <Server className="h-4 w-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">
+                    {serverCount} serveur{serverCount !== 1 ? 's' : ''} hébergé{serverCount !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {runningCount} actif{runningCount !== 1 ? 's' : ''} en ce moment
+                  </p>
+                </div>
+              </div>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/servers" className="flex items-center gap-1.5">
+                Gérer les serveurs
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
       </section>
 
       {/* ── Recent activity ────────────────────────────────────────────────────── */}
-      {servers && servers.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold mb-4">Activité récente</h2>
-          <Card>
-            <CardContent className="pt-4">
-              {workspaceLoading ? (
-                <div className="flex justify-center py-4">
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                </div>
-              ) : (
-                <RecentActivity logs={[]} />
-              )}
-            </CardContent>
-          </Card>
-        </section>
-      )}
+      <section>
+        <h2 className="text-lg font-semibold mb-4">Activité récente</h2>
+        <Card>
+          <CardContent className="pt-4">
+            {workspaceLoading ? (
+              <div className="flex justify-center py-4">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <RecentActivity logs={[]} />
+            )}
+          </CardContent>
+        </Card>
+      </section>
     </div>
   )
 }

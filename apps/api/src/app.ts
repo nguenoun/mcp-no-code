@@ -16,6 +16,7 @@ import workspaceRouter from './routes/workspace'
 import templatesRouter from './routes/templates'
 import internalRouter from './routes/internal'
 import { runtimeManager } from './services/runtime-manager'
+import { prisma } from '@mcpbuilder/db'
 
 const app = express()
 
@@ -53,55 +54,86 @@ app.use('/mcp/:serverId', mcpRateLimiter, mcpAuthMiddleware, async (req, res, ne
   try {
     const serverId = req.params['serverId']!
 
-    // Resolve internal port
+    // ── Local runtime path ────────────────────────────────────────────────────
     const port = runtimeManager.getPort(serverId)
-    if (!port) {
-      res.status(503).json({
-        success: false,
-        error: { code: 'INTERNAL_ERROR', message: 'MCP server is not running' },
+    if (port) {
+      // Build target path (strip /mcp/:serverId prefix, keep the rest + query string)
+      const targetPath =
+        req.path +
+        (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '')
+
+      const proxyOptions: http.RequestOptions = {
+        hostname: '127.0.0.1',
+        port,
+        path: targetPath || '/',
+        method: req.method,
+        headers: {
+          ...req.headers,
+          host: `127.0.0.1:${port}`,
+        },
+      }
+
+      const proxyReq = http.request(proxyOptions, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers)
+        proxyRes.pipe(res)
+        res.on('close', () => proxyReq.destroy())
       })
+
+      proxyReq.on('error', (err) => {
+        if (!res.headersSent) {
+          res.status(502).json({ error: 'Bad Gateway', message: err.message })
+        }
+      })
+
+      if (['POST', 'PUT', 'PATCH'].includes(req.method ?? '') && req.body !== undefined) {
+        const bodyStr = JSON.stringify(req.body)
+        proxyReq.setHeader('Content-Type', 'application/json')
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyStr))
+        proxyReq.write(bodyStr)
+        proxyReq.end()
+      } else {
+        proxyReq.end()
+      }
       return
     }
 
-    // Build target path (strip /mcp/:serverId prefix, keep the rest + query string)
-    const targetPath =
-      req.path +
-      (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '')
-
-    // Forward request to the internal runtime server
-    const proxyOptions: http.RequestOptions = {
-      hostname: '127.0.0.1',
-      port,
-      path: targetPath || '/',
-      method: req.method,
-      headers: {
-        ...req.headers,
-        host: `127.0.0.1:${port}`,
-      },
-    }
-
-    const proxyReq = http.request(proxyOptions, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers)
-      proxyRes.pipe(res)
-      res.on('close', () => proxyReq.destroy())
+    // ── Cloudflare Worker path ────────────────────────────────────────────────
+    const server = await prisma.mcpServer.findUnique({
+      where: { id: serverId },
+      select: { runtimeMode: true, endpointUrl: true },
     })
 
-    proxyReq.on('error', (err) => {
-      if (!res.headersSent) {
-        res.status(502).json({ error: 'Bad Gateway', message: err.message })
+    if (server?.runtimeMode === 'CLOUDFLARE' && server.endpointUrl) {
+      const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''
+      const targetUrl = server.endpointUrl.replace(/\/$/, '') + (req.path || '/mcp') + qs
+
+      const forwardHeaders: Record<string, string> = {
+        'content-type': 'application/json',
       }
-    })
+      if (req.headers['authorization']) {
+        forwardHeaders['authorization'] = req.headers['authorization'] as string
+      }
 
-    // Re-serialise body (Express has already parsed it from JSON)
-    if (['POST', 'PUT', 'PATCH'].includes(req.method ?? '') && req.body !== undefined) {
-      const bodyStr = JSON.stringify(req.body)
-      proxyReq.setHeader('Content-Type', 'application/json')
-      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyStr))
-      proxyReq.write(bodyStr)
-      proxyReq.end()
-    } else {
-      proxyReq.end()
+      const cfRes = await fetch(targetUrl, {
+        method: req.method,
+        headers: forwardHeaders,
+        ...((['POST', 'PUT', 'PATCH'].includes(req.method ?? '') && req.body !== undefined) && {
+          body: JSON.stringify(req.body),
+        }),
+      })
+
+      const cfBody = await cfRes.text()
+      res.status(cfRes.status)
+      const ct = cfRes.headers.get('content-type')
+      if (ct) res.set('Content-Type', ct)
+      res.send(cfBody)
+      return
     }
+
+    res.status(503).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: 'MCP server is not running' },
+    })
   } catch (err) {
     next(err)
   }
