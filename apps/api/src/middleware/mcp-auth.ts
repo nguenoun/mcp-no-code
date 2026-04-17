@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express'
 import { prisma } from '@mcpbuilder/db'
 import { redis } from '../lib/redis'
 import { logger } from '../lib/logger'
+import { verifyOAuthAccessToken } from '../lib/oauth-jwt'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,16 @@ function apiKeyCacheKey(apiKey: string): string {
 function accessLogKey(serverId: string): string {
   const date = new Date().toISOString().slice(0, 10)
   return `mcp:access:${serverId}:${date}`
+}
+
+/** Cache du mode d'auth + statut d'un serveur (lookup par serverId). */
+function serverModeCacheKey(serverId: string): string {
+  return `mcp:server:mode:${serverId}`
+}
+
+/** Cache du statut de révocation d'un JTI OAuth. */
+function jtiCacheKey(jti: string): string {
+  return `mcp:oauth:jti:${jti}`
 }
 
 // ─── Access logging ───────────────────────────────────────────────────────────
@@ -50,7 +61,7 @@ async function logAccess(
     .catch(() => undefined) // log silently; never block the request
 }
 
-// ─── Cached server lookup ─────────────────────────────────────────────────────
+// ─── Cached server lookup (API key path) ─────────────────────────────────────
 
 interface CachedServer {
   serverId: string
@@ -88,6 +99,66 @@ async function resolveApiKey(apiKey: string): Promise<CachedServer | null> {
   return { serverId: dbServer.id, status: dbServer.status }
 }
 
+// ─── Cached server lookup (OAuth path) ───────────────────────────────────────
+
+interface ServerModeCache {
+  authMode: string
+  status: string
+}
+
+/**
+ * Lookup d'un serveur par son ID pour récupérer authMode + status.
+ * Utilisé sur le chemin OAuth pour éviter d'invalider le chemin API_KEY
+ * qui résout par apiKey.
+ */
+async function resolveServerById(serverId: string): Promise<ServerModeCache | null> {
+  const cached = await redis.get(serverModeCacheKey(serverId)).catch(() => null)
+  if (cached) {
+    try {
+      return JSON.parse(cached) as ServerModeCache
+    } catch {
+      // Corrupt entry — fall through to DB
+    }
+  }
+
+  const dbServer = await prisma.mcpServer.findUnique({
+    where: { id: serverId },
+    select: { authMode: true, status: true },
+  })
+  if (!dbServer) return null
+
+  redis
+    .set(serverModeCacheKey(serverId), JSON.stringify(dbServer), 'EX', CACHE_TTL_SECS)
+    .catch(() => undefined)
+
+  return { authMode: dbServer.authMode, status: dbServer.status }
+}
+
+/**
+ * Vérifie si un JTI OAuth est révoqué.
+ * Cache Redis 5 min : "valid" | "revoked".
+ * La fenêtre de 5 min est acceptable (standard pour les OAuth AS).
+ */
+async function isJtiRevoked(jti: string, mcpServerId: string): Promise<boolean> {
+  const cached = await redis.get(jtiCacheKey(jti)).catch(() => null)
+  if (cached === 'revoked') return true
+  if (cached === 'valid') return false
+
+  const token = await prisma.oAuthToken.findFirst({
+    where: { jti, mcpServerId },
+    select: { revokedAt: true },
+  })
+
+  // Introuvable ou déjà révoqué → revoked
+  if (!token || token.revokedAt !== null) {
+    redis.set(jtiCacheKey(jti), 'revoked', 'EX', CACHE_TTL_SECS).catch(() => undefined)
+    return true
+  }
+
+  redis.set(jtiCacheKey(jti), 'valid', 'EX', CACHE_TTL_SECS).catch(() => undefined)
+  return false
+}
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 export async function mcpAuthMiddleware(
@@ -119,7 +190,70 @@ export async function mcpAuthMiddleware(
       return
     }
 
-    const apiKey = authHeader.slice(7)
+    const token = authHeader.slice(7)
+
+    // ── Chemin OAuth JWT ──────────────────────────────────────────────────────
+    //
+    // On vérifie d'abord la signature JWT (O(1), pas de I/O).
+    // Si le token est un JWT valide (signé avec OAUTH_SIGNING_KEY) :
+    //   1. Vérification sid === serverId (claim du JWT)
+    //   2. Vérification authMode du serveur === 'OAUTH'
+    //   3. Vérification jti non révoqué (DB/cache Redis)
+    //
+    // Si le JWT est invalide (mauvaise signature, expiré, format incorrect) :
+    //   → on tombe sur le chemin API_KEY ci-dessous, inchangé.
+
+    const oauthPayload = verifyOAuthAccessToken(token)
+    if (oauthPayload !== null) {
+      // Vérifie que le JWT cible bien ce serveur
+      if (oauthPayload.sid !== serverId) {
+        await logAccess(serverId, ip, false, 'oauth-sid-mismatch')
+        res.status(401).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Token not valid for this server' },
+        })
+        return
+      }
+
+      // Vérifie que le serveur attend bien des tokens OAuth
+      const serverInfo = await resolveServerById(serverId)
+      if (!serverInfo || serverInfo.authMode !== 'OAUTH') {
+        await logAccess(serverId, ip, false, 'oauth-token-on-apikey-server')
+        res.status(401).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'This server does not accept OAuth tokens' },
+        })
+        return
+      }
+
+      if (serverInfo.status === 'STOPPED') {
+        await logAccess(serverId, ip, false, 'server-stopped')
+        res.status(401).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'MCP server is stopped' },
+        })
+        return
+      }
+
+      // Vérifie que le JTI n'a pas été révoqué
+      const revoked = await isJtiRevoked(oauthPayload.jti, serverId)
+      if (revoked) {
+        await logAccess(serverId, ip, false, 'oauth-token-revoked')
+        res.status(401).json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Token has been revoked' },
+        })
+        return
+      }
+
+      await logAccess(serverId, ip, true, 'ok')
+      next()
+      return
+    }
+
+    // ── Chemin API_KEY (inchangé) ─────────────────────────────────────────────
+
+    const apiKey = token
     const server = await resolveApiKey(apiKey)
 
     if (!server) {

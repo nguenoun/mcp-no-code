@@ -116,6 +116,58 @@ function buildAuthHeaders(credentialType, value) {
   return {};
 }
 
+// ─── E1. JWT verification — WebCrypto (HS256) ─────────────────────────────────
+//
+// Vérifie signature, exp et sid sans dépendance externe.
+// WebCrypto est disponible nativement dans les Cloudflare Workers.
+
+function base64urlDecode(str) {
+  const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, "=");
+  return atob(padded);
+}
+
+function base64urlToBytes(str) {
+  return Uint8Array.from(base64urlDecode(str), (c) => c.charCodeAt(0));
+}
+
+async function verifyJwt(token, secret, expectedSid) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return false;
+
+    const [headerB64, payloadB64, signatureB64] = parts;
+
+    // Decode and parse payload
+    const payloadJson = base64urlDecode(payloadB64);
+    const payload = JSON.parse(payloadJson);
+
+    // Check expiry (exp claim, seconds since epoch)
+    if (typeof payload.exp === "number" && Date.now() / 1000 > payload.exp) return false;
+
+    // Check sid — token must target this specific server
+    if (payload.sid !== expectedSid) return false;
+
+    // Import HMAC-SHA256 key from secret string
+    const secretBytes = new TextEncoder().encode(secret);
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      secretBytes,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+
+    // Verify signature over "header.payload"
+    const signatureBytes = base64urlToBytes(signatureB64);
+    const dataBytes = new TextEncoder().encode(headerB64 + "." + payloadB64);
+
+    return await crypto.subtle.verify("HMAC", cryptoKey, signatureBytes, dataBytes);
+  } catch {
+    return false;
+  }
+}
+
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 
 function reportMetrics(env, toolName, status, latencyMs, errorMessage) {
@@ -242,11 +294,40 @@ export default {
       });
     }
 
-    // All other routes require API key auth
-    const auth = request.headers.get("Authorization");
-    if (!auth || auth !== "Bearer " + env.MCP_API_KEY) {
-      return new Response("Unauthorized", { status: 401 });
+    // ── E2. Auth — branchement sur AUTH_MODE ──────────────────────────────────
+    //
+    // AUTH_MODE = 'OAUTH'   → vérifie le JWT avec verifyJwt (WebCrypto HS256)
+    // AUTH_MODE = 'API_KEY' → compare le Bearer token à MCP_API_KEY (défaut)
+
+    const authHeader = request.headers.get("Authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+    if (env.AUTH_MODE === "OAUTH") {
+      if (!bearerToken || !env.OAUTH_SIGNING_KEY) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized", message: "Missing Bearer token or signing key" }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      const valid = await verifyJwt(bearerToken, env.OAUTH_SIGNING_KEY, SERVER_ID);
+      if (!valid) {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized", message: "Invalid or expired OAuth token" }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        );
+      }
+    } else {
+      // API_KEY (default)
+      if (!bearerToken || bearerToken !== env.MCP_API_KEY) {
+        return new Response("Unauthorized", { status: 401 });
+      }
     }
+
+    // ── E3. Streamable HTTP transport — POST /mcp ─────────────────────────────
+    //
+    // Reçoit du JSON-RPC 2.0 (single object ou batch array).
+    // Retourne la réponse JSON directement (Content-Type: application/json).
+    // Pas de SSE — one-shot request/response.
 
     if (url.pathname === "/mcp" && request.method === "POST") {
       let body;

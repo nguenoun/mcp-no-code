@@ -29,6 +29,11 @@ export enum RuntimeMode {
   CLOUDFLARE = 'CLOUDFLARE',
 }
 
+export enum AuthMode {
+  API_KEY = 'API_KEY',
+  OAUTH = 'OAUTH',
+}
+
 // ─── Model types (safe for API responses — no sensitive fields) ───────────────
 
 export interface User {
@@ -57,6 +62,7 @@ export interface McpServer {
   description: string | null
   status: ServerStatus
   runtimeMode: RuntimeMode
+  authMode: AuthMode
   endpointUrl: string | null
   apiKey: string
   createdAt: Date
@@ -84,6 +90,37 @@ export interface Credential {
   workspaceId: string
   name: string
   type: CredentialType
+  createdAt: Date
+}
+
+// ─── OAuth Authorization Server ──────────────────────────────────────────────
+
+/**
+ * Application tierce enregistrée (Dust, Zapier…).
+ * Ne contient jamais clientSecretHash.
+ */
+export interface OAuthApp {
+  id: string
+  mcpServerId: string
+  name: string
+  clientId: string
+  redirectUris: string[]
+  createdAt: Date
+}
+
+/**
+ * Métadonnées d'un token actif pour l'affichage dans le dashboard.
+ * Ne contient jamais les valeurs de token.
+ */
+export interface OAuthTokenMeta {
+  id: string
+  jti: string
+  userId: string
+  clientId: string
+  mcpServerId: string
+  scopes: string[]
+  expiresAt: Date
+  revokedAt: Date | null
   createdAt: Date
 }
 

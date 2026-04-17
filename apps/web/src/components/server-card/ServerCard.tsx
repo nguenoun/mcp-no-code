@@ -150,7 +150,7 @@ export function ServerCard({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <Link
-                  href={`/servers/${server.id}`}
+                  href={`/app/servers/${server.id}`}
                   className="font-semibold text-sm hover:underline truncate"
                 >
                   {server.name}
@@ -194,7 +194,7 @@ export function ServerCard({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
-                  <Link href={`/servers/${server.id}`}>
+                  <Link href={`/app/servers/${server.id}`}>
                     <ExternalLink className="h-3.5 w-3.5 mr-2" />
                     Ouvrir
                   </Link>

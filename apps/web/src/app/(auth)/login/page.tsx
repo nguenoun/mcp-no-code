@@ -48,12 +48,12 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/')
+    router.push('/app')
     router.refresh()
   }
 
   async function handleGoogleSignIn() {
-    await signIn('google', { callbackUrl: '/' })
+    await signIn('google', { callbackUrl: '/app' })
   }
 
   return (

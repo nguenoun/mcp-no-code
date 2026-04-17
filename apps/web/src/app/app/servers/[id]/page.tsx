@@ -6,6 +6,7 @@ import {
   ArrowLeft, Copy, Check, RefreshCw, RotateCcw, Play,
   Loader2, AlertCircle, CheckCircle2, Clock, ChevronLeft, ChevronRight, Plus,
   Zap, Globe, Trash2, Activity, Save, Search, CalendarDays,
+  ShieldCheck, Key, Users, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -65,6 +66,16 @@ import {
   useDeleteTool,
 } from '@/hooks/use-tools'
 import { useLogs } from '@/hooks/use-logs'
+import {
+  useOAuthApps,
+  useCreateOAuthApp,
+  useDeleteOAuthApp,
+  useOAuthSessions,
+  useRevokeSession,
+  useRevokeAllSessions,
+  useUpdateAuthMode,
+  type OAuthAppCreated,
+} from '@/hooks/use-oauth'
 import { cn } from '@/lib/utils'
 import type { McpTool } from '@mcpbuilder/shared'
 import type { ToolFormData } from '@/hooks/use-tools'
@@ -1031,6 +1042,543 @@ function ParamsTab({
   )
 }
 
+// ─── Tab: Autorisation ────────────────────────────────────────────────────────
+
+// G4 — Dialog "Nouvelle application OAuth"
+function NewAppDialog({
+  serverId,
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  serverId: string
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onCreated: (app: OAuthAppCreated) => void
+}) {
+  const create = useCreateOAuthApp(serverId)
+  const [name, setName] = React.useState('')
+  const [uris, setUris] = React.useState('')
+
+  const handleClose = () => {
+    setName('')
+    setUris('')
+    create.reset()
+    onOpenChange(false)
+  }
+
+  const handleSubmit = async () => {
+    const redirectUris = uris
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const app = await create.mutateAsync({ name: name.trim(), redirectUris })
+    onCreated(app)
+    setName('')
+    setUris('')
+  }
+
+  const errorMsg = create.isError
+    ? ((create.error as { response?: { data?: { error?: { message?: string } } } })?.response?.data
+        ?.error?.message ?? 'Une erreur est survenue.')
+    : null
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nouvelle application OAuth</DialogTitle>
+          <DialogDescription>
+            Enregistrez une application cliente pour lui permettre d&apos;accéder à ce serveur via
+            OAuth 2.0.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label htmlFor="app-name">Nom de l&apos;application</Label>
+            <Input
+              id="app-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Mon client MCP"
+              maxLength={100}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="app-uris">URIs de redirection</Label>
+            <Textarea
+              id="app-uris"
+              value={uris}
+              onChange={(e) => setUris(e.target.value)}
+              placeholder={'http://localhost:3000/callback\nhttps://myapp.example.com/oauth/callback'}
+              className="font-mono text-xs min-h-[80px] resize-none"
+              spellCheck={false}
+            />
+            <p className="text-xs text-muted-foreground">Une URI par ligne.</p>
+          </div>
+          {errorMsg && (
+            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 rounded-md p-3">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} disabled={create.isPending}>
+            Annuler
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!name.trim() || !uris.trim() || create.isPending}
+          >
+            {create.isPending ? (
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Création…</>
+            ) : (
+              'Créer'
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// G4 — Dialog "Credentials créés" (one-time display)
+function AppCreatedDialog({
+  app,
+  open,
+  onOpenChange,
+}: {
+  app: OAuthAppCreated | null
+  open: boolean
+  onOpenChange: (v: boolean) => void
+}) {
+  if (!app) return null
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Application créée</DialogTitle>
+          <DialogDescription>
+            Copiez le <strong>Client Secret</strong> maintenant. Il ne sera plus affiché.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Client ID
+            </p>
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+              <code className="flex-1 text-xs font-mono truncate">{app.clientId}</code>
+              <CopyButton value={app.clientId} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
+              Client Secret
+            </p>
+            <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50/50 px-3 py-2">
+              <code className="flex-1 text-xs font-mono break-all">{app.clientSecret}</code>
+              <CopyButton value={app.clientSecret} />
+            </div>
+            <p className="text-xs text-amber-600 flex items-center gap-1">
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              Stockez ce secret en lieu sûr — il ne sera plus jamais affiché.
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button onClick={() => onOpenChange(false)}>Fermer</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// G2-G5 — AuthTab
+function AuthTab({
+  serverId,
+  initialAuthMode,
+}: {
+  serverId: string
+  initialAuthMode: 'API_KEY' | 'OAUTH'
+}) {
+  const updateAuthMode = useUpdateAuthMode(serverId)
+  const { data: apps, isLoading: appsLoading } = useOAuthApps(serverId)
+  const deleteApp = useDeleteOAuthApp(serverId)
+  const { data: sessions, isLoading: sessionsLoading } = useOAuthSessions(serverId)
+  const revokeSession = useRevokeSession(serverId)
+  const revokeAll = useRevokeAllSessions(serverId)
+
+  // Local auth mode — optimistically updated after PUT
+  const [authMode, setAuthMode] = React.useState<'API_KEY' | 'OAUTH'>(initialAuthMode)
+  React.useEffect(() => { setAuthMode(initialAuthMode) }, [initialAuthMode])
+
+  const [switchConfirmOpen, setSwitchConfirmOpen] = React.useState(false)
+  const [pendingMode, setPendingMode] = React.useState<'API_KEY' | 'OAUTH' | null>(null)
+  const [newAppOpen, setNewAppOpen] = React.useState(false)
+  const [createdApp, setCreatedApp] = React.useState<OAuthAppCreated | null>(null)
+  const [createdDialogOpen, setCreatedDialogOpen] = React.useState(false)
+  const [revokeAllConfirm, setRevokeAllConfirm] = React.useState(false)
+
+  const requestSwitch = (mode: 'API_KEY' | 'OAUTH') => {
+    setPendingMode(mode)
+    setSwitchConfirmOpen(true)
+  }
+
+  const confirmSwitch = async () => {
+    if (!pendingMode) return
+    await updateAuthMode.mutateAsync(pendingMode)
+    setAuthMode(pendingMode)
+    setSwitchConfirmOpen(false)
+    setPendingMode(null)
+  }
+
+  const handleAppCreated = (app: OAuthAppCreated) => {
+    setNewAppOpen(false)
+    setCreatedApp(app)
+    setCreatedDialogOpen(true)
+  }
+
+  const handleRevokeAll = async () => {
+    await revokeAll.mutateAsync()
+    setRevokeAllConfirm(false)
+  }
+
+  const isOAuth = authMode === 'OAUTH'
+
+  return (
+    <div className="space-y-8 max-w-2xl">
+
+      {/* ── G2 Mode d'authentification ────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold">Mode d&apos;authentification</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Contrôle comment les clients s&apos;authentifient pour appeler ce serveur MCP.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* API Key card */}
+          <button
+            type="button"
+            onClick={() => authMode !== 'API_KEY' && requestSwitch('API_KEY')}
+            className={cn(
+              'text-left rounded-lg border p-4 transition-colors',
+              authMode === 'API_KEY'
+                ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                : 'hover:border-muted-foreground/40 cursor-pointer',
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-md bg-blue-100 p-1.5">
+                <Key className="h-4 w-4 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Clé API</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Bearer token statique — simple et rapide. Adapté aux clients de confiance.
+                </p>
+              </div>
+            </div>
+            {authMode === 'API_KEY' && (
+              <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Actif
+              </span>
+            )}
+          </button>
+
+          {/* OAuth card */}
+          <button
+            type="button"
+            onClick={() => authMode !== 'OAUTH' && requestSwitch('OAUTH')}
+            className={cn(
+              'text-left rounded-lg border p-4 transition-colors',
+              authMode === 'OAUTH'
+                ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                : 'hover:border-muted-foreground/40 cursor-pointer',
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-md bg-purple-100 p-1.5">
+                <ShieldCheck className="h-4 w-4 text-purple-600" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">OAuth 2.0</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Flux PKCE avec consentement utilisateur. Recommandé pour les accès tiers.
+                </p>
+              </div>
+            </div>
+            {authMode === 'OAUTH' && (
+              <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Actif
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* ── G3 Applications (only in OAUTH mode) ─────────────────────────────── */}
+      {isOAuth && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">Applications enregistrées</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Clients OAuth autorisés à demander l&apos;accès à ce serveur.
+                </p>
+              </div>
+              <Button size="sm" onClick={() => setNewAppOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Nouvelle application
+              </Button>
+            </div>
+
+            {appsLoading ? (
+              <div className="space-y-2">
+                {[1, 2].map((i) => (
+                  <div key={i} className="rounded-lg border p-4 space-y-2">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-3 w-64" />
+                  </div>
+                ))}
+              </div>
+            ) : !apps || apps.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-8 text-center">
+                  <p className="text-sm font-medium">Aucune application enregistrée</p>
+                  <p className="text-xs text-muted-foreground mt-1 mb-4">
+                    Créez une application pour permettre à vos clients OAuth de s&apos;authentifier.
+                  </p>
+                  <Button size="sm" onClick={() => setNewAppOpen(true)}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Nouvelle application
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {apps.map((app) => (
+                  <div
+                    key={app.id}
+                    className="flex items-start justify-between gap-3 rounded-lg border p-4"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-medium truncate">{app.name}</p>
+                      <code className="text-xs font-mono text-muted-foreground">
+                        {app.clientId}
+                      </code>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span>
+                          Créé le{' '}
+                          {new Date(app.createdAt).toLocaleDateString('fr-FR')}
+                        </span>
+                        <span>
+                          {app._count.tokens} session{app._count.tokens !== 1 ? 's' : ''} active
+                          {app._count.tokens !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => deleteApp.mutate(app.id)}
+                      disabled={deleteApp.isPending}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── G5 Sessions actives (only in OAUTH mode) ──────────────────────────── */}
+      {isOAuth && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                  Sessions actives
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Tokens OAuth valides accordant l&apos;accès à ce serveur.
+                </p>
+              </div>
+              {sessions && sessions.length > 0 && (
+                !revokeAllConfirm ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs shrink-0"
+                    onClick={() => setRevokeAllConfirm(true)}
+                  >
+                    Tout révoquer
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Confirmer ?</span>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={handleRevokeAll}
+                      disabled={revokeAll.isPending}
+                    >
+                      {revokeAll.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Oui'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => setRevokeAllConfirm(false)}
+                    >
+                      Non
+                    </Button>
+                  </div>
+                )
+              )}
+            </div>
+
+            {sessionsLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-3 py-2 border-b">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-20 ml-auto" />
+                  </div>
+                ))}
+              </div>
+            ) : !sessions || sessions.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                Aucune session active.
+              </p>
+            ) : (
+              <div className="space-y-0">
+                {sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className="flex items-center gap-3 py-3 border-b last:border-0 text-sm flex-wrap"
+                  >
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-xs">{session.user.email}</span>
+                        <Badge variant="secondary" className="text-xs">
+                          {session.client.name}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {session.scopes.map((s) => (
+                          <Badge
+                            key={s}
+                            variant="outline"
+                            className="text-xs font-mono px-1.5 py-0"
+                          >
+                            {s}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 text-xs text-muted-foreground">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="flex items-center gap-1 cursor-default">
+                              <Clock className="h-3 w-3" />
+                              {new Date(session.createdAt).toLocaleDateString('fr-FR')}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-xs">
+                              Expire le{' '}
+                              {new Date(session.expiresAt).toLocaleString('fr-FR', {
+                                dateStyle: 'short',
+                                timeStyle: 'short',
+                              })}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() => revokeSession.mutate(session.id)}
+                        disabled={revokeSession.isPending}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Switch mode confirmation */}
+      <Dialog open={switchConfirmOpen} onOpenChange={setSwitchConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Changer le mode d&apos;authentification ?</DialogTitle>
+            <DialogDescription>
+              Passer en mode{' '}
+              <strong>{pendingMode === 'OAUTH' ? 'OAuth 2.0' : 'Clé API'}</strong>{' '}
+              {pendingMode === 'API_KEY'
+                ? 'révoquera toutes les sessions OAuth actives. Les clients utilisant un Bearer token OAuth ne pourront plus se connecter.'
+                : 'désactivera l\'authentification par clé API statique.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSwitchConfirmOpen(false)}
+              disabled={updateAuthMode.isPending}
+            >
+              Annuler
+            </Button>
+            <Button onClick={confirmSwitch} disabled={updateAuthMode.isPending}>
+              {updateAuthMode.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : null}
+              Confirmer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New app dialog */}
+      <NewAppDialog
+        serverId={serverId}
+        open={newAppOpen}
+        onOpenChange={setNewAppOpen}
+        onCreated={handleAppCreated}
+      />
+
+      {/* Created credentials dialog */}
+      <AppCreatedDialog
+        app={createdApp}
+        open={createdDialogOpen}
+        onOpenChange={setCreatedDialogOpen}
+      />
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ServerDetailPage() {
@@ -1086,7 +1634,7 @@ export default function ServerDetailPage() {
             variant="ghost"
             size="icon"
             className="h-8 w-8 mt-0.5 shrink-0"
-            onClick={() => router.push('/servers')}
+            onClick={() => router.push('/app/servers')}
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
@@ -1183,6 +1731,7 @@ export default function ServerDetailPage() {
           <TabsTrigger value="connexion" className="flex-1">Connexion</TabsTrigger>
           <TabsTrigger value="logs" className="flex-1">Logs</TabsTrigger>
           <TabsTrigger value="params" className="flex-1">Paramètres</TabsTrigger>
+          <TabsTrigger value="auth" className="flex-1">Auth</TabsTrigger>
         </TabsList>
 
         <TabsContent value="tools" className="mt-6">
@@ -1218,9 +1767,16 @@ export default function ServerDetailPage() {
               initialName={serverName}
               initialDescription={serverDetail?.description}
               initialCredentialId={serverDetail?.credential?.id}
-              onDeleted={() => router.push('/servers')}
+              onDeleted={() => router.push('/app/servers')}
             />
           )}
+        </TabsContent>
+
+        <TabsContent value="auth" className="mt-6">
+          <AuthTab
+            serverId={serverId}
+            initialAuthMode={(serverDetail?.authMode as 'API_KEY' | 'OAUTH') ?? 'API_KEY'}
+          />
         </TabsContent>
       </Tabs>
 

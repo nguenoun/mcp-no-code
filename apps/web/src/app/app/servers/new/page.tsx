@@ -1085,7 +1085,7 @@ export default function NewServerPage() {
         await apiClient.post(url, toolPayloads[i])
       }
 
-      router.push(`/servers/${server.id}`)
+      router.push(`/app/servers/${server.id}`)
     } catch {
       // Errors are surfaced via createServer.error if needed
     } finally {
@@ -1119,7 +1119,7 @@ export default function NewServerPage() {
         })
       }
 
-      router.push(`/servers/${server.id}`)
+      router.push(`/app/servers/${server.id}`)
     } catch {
       // Errors are surfaced via createServer.error if needed
     } finally {
@@ -1165,7 +1165,7 @@ export default function NewServerPage() {
               onAnalyze={handleAnalyze}
               isLoading={isLoading}
               error={parseError}
-              onNext={() => source === 'template' ? router.push('/templates') : setStep(2)}
+              onNext={() => source === 'template' ? router.push('/app/templates') : setStep(2)}
               hasParsed={!!parsedResult}
             />
           )}

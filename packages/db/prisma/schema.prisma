@@ -41,6 +41,11 @@ enum RuntimeMode {
   CLOUDFLARE
 }
 
+enum AuthMode {
+  API_KEY
+  OAUTH
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
@@ -55,6 +60,8 @@ model User {
   updatedAt    DateTime    @updatedAt
 
   workspaces   Workspace[]
+  oauthCodes   OAuthCode[]
+  oauthTokens  OAuthToken[]
 
   @@map("users")
 }
@@ -81,16 +88,19 @@ model McpServer {
   description  String?
   status       ServerStatus @default(STOPPED)
   runtimeMode  RuntimeMode  @default(LOCAL)
+  authMode     AuthMode     @default(API_KEY)
   endpointUrl  String?
   apiKey       String       @unique @default(cuid())
   credentialId String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  credential Credential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
-  tools      McpTool[]
-  callLogs   CallLog[]
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  credential   Credential?  @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  tools        McpTool[]
+  callLogs     CallLog[]
+  oauthApps    OAuthApp[]
+  oauthTokens  OAuthToken[]
 
   @@index([workspaceId])
   @@map("mcp_servers")
@@ -127,6 +137,72 @@ model Credential {
 
   @@index([workspaceId])
   @@map("credentials")
+}
+
+// ─── OAuth Authorization Server ──────────────────────────────────────────────
+
+// Applications tierces enregistrées (ex : Dust, Zapier) — clients confidentiels
+model OAuthApp {
+  id               String    @id @default(cuid())
+  mcpServerId      String
+  name             String
+  clientId         String    @unique
+  clientSecretHash String
+  redirectUris     String[]
+  createdAt        DateTime  @default(now())
+
+  mcpServer McpServer   @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+  codes     OAuthCode[]
+  tokens    OAuthToken[]
+
+  @@index([mcpServerId])
+  @@map("oauth_apps")
+}
+
+// Authorization codes — usage unique, TTL 5 minutes
+model OAuthCode {
+  id            String    @id @default(cuid())
+  code          String    @unique
+  userId        String
+  clientId      String
+  mcpServerId   String
+  redirectUri   String
+  scopes        String[]
+  codeChallenge String
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  user   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client OAuthApp  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([code])
+  @@index([userId])
+  @@map("oauth_codes")
+}
+
+// Tokens actifs — access (JWT signé) + refresh (opaque)
+model OAuthToken {
+  id           String    @id @default(cuid())
+  jti          String    @unique          // JWT ID pour révocation côté Worker
+  accessToken  String    @unique
+  refreshToken String?   @unique
+  userId       String
+  clientId     String
+  mcpServerId  String
+  scopes       String[]
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client    OAuthApp  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  mcpServer McpServer @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([mcpServerId])
+  @@index([jti])
+  @@map("oauth_tokens")
 }
 
 model CallLog {

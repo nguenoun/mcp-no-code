@@ -168,7 +168,7 @@ function ServerRow({
         {/* Name + description */}
         <div className="min-w-0 flex-[2]">
           <Link
-            href={`/servers/${server.id}`}
+            href={`/app/servers/${server.id}`}
             className="font-medium hover:underline truncate block"
           >
             {server.name}
@@ -242,7 +242,7 @@ function ServerRow({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
-                <Link href={`/servers/${server.id}`}>
+                <Link href={`/app/servers/${server.id}`}>
                   <ExternalLink className="h-3.5 w-3.5 mr-2" />
                   Ouvrir
                 </Link>
@@ -363,7 +363,7 @@ export default function ServersPage() {
           </p>
         </div>
         <Button asChild>
-          <Link href="/servers/new">
+          <Link href="/app/servers/new">
             <Plus className="h-4 w-4 mr-2" />
             Nouveau serveur
           </Link>
@@ -496,7 +496,7 @@ export default function ServersPage() {
               Créez votre premier serveur pour commencer à exposer des outils à vos agents IA.
             </p>
             <Button asChild>
-              <Link href="/servers/new">
+              <Link href="/app/servers/new">
                 <Plus className="h-4 w-4 mr-2" />
                 Créer un serveur
               </Link>

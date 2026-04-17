@@ -63,7 +63,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (me?.hasCompletedOnboarding) {
-      router.replace('/')
+      router.replace('/app')
     }
   }, [me?.hasCompletedOnboarding, router])
 
@@ -163,7 +163,7 @@ export default function OnboardingPage() {
               onCategoryChange={setCategory}
               selectedTemplateId={selectedTemplateId}
               onSelectTemplate={setSelectedTemplateId}
-              onStartFromScratch={() => router.push('/servers/new')}
+              onStartFromScratch={() => router.push('/app/servers/new')}
             />
             <div className="flex justify-end">
               <Button onClick={() => setStep(3)} disabled={!selectedTemplateId}>
@@ -289,7 +289,7 @@ export default function OnboardingPage() {
                 Copier URL
               </Button>
             </div>
-            <Button onClick={() => router.push('/')}>Aller au dashboard</Button>
+            <Button onClick={() => router.push('/app')}>Aller au dashboard</Button>
           </CardContent>
         </Card>
       )}

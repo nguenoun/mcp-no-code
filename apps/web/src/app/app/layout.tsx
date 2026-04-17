@@ -5,10 +5,10 @@ import { authOptions } from '@/lib/auth'
 import { SignOutButton } from '@/components/sign-out-button'
 
 const NAV_ITEMS = [
-  { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/servers', icon: Server, label: 'Serveurs' },
-  { href: '/templates', icon: LayoutTemplate, label: 'Templates' },
-  { href: '/workspace/credentials', icon: KeyRound, label: 'Credentials' },
+  { href: '/app', icon: LayoutDashboard, label: 'Dashboard' },
+  { href: '/app/servers', icon: Server, label: 'Serveurs' },
+  { href: '/app/templates', icon: LayoutTemplate, label: 'Templates' },
+  { href: '/app/workspace/credentials', icon: KeyRound, label: 'Credentials' },
 ]
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {

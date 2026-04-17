@@ -49,7 +49,7 @@ export default function TemplatesPage() {
         serverName: serverName.trim(),
         credentialId: credentialId ?? undefined,
       })
-      router.push(`/servers/${created.id}`)
+      router.push(`/app/servers/${created.id}`)
     } catch (error) {
       setActionError(getErrorMessage(error))
     }
@@ -70,7 +70,7 @@ export default function TemplatesPage() {
         onCategoryChange={setCategory}
         selectedTemplateId={selectedTemplateId}
         onSelectTemplate={setSelectedTemplateId}
-        onStartFromScratch={() => router.push('/servers/new')}
+        onStartFromScratch={() => router.push('/app/servers/new')}
       />
 
       {selectedTemplate && (

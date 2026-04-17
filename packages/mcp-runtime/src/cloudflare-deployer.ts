@@ -10,6 +10,8 @@ export type WorkerDeployConfig = {
   baseUrl?: string
   internalApiUrl?: string
   analyticsEngineDataset?: string
+  /** Mode d'authentification du serveur — injecté comme binding AUTH_MODE dans le Worker. */
+  authMode?: 'API_KEY' | 'OAUTH'
 }
 
 export type WorkerLogEntry = {
@@ -181,6 +183,12 @@ export class CloudflareDeployer {
           name: 'CREDENTIAL_TYPE',
           text: config.credential?.type ?? '',
         },
+        // E4 — auth mode injecté en plain_text (pas un secret, pas sensible)
+        {
+          type: 'plain_text',
+          name: 'AUTH_MODE',
+          text: config.authMode ?? 'API_KEY',
+        },
       ]
 
       if (config.internalApiUrl) {
@@ -222,6 +230,19 @@ export class CloudflareDeployer {
       const internalSecret = process.env['INTERNAL_SECRET']
       if (internalSecret) {
         await this.setWorkerSecret(workerName, 'INTERNAL_SECRET', internalSecret)
+      }
+
+      // E4 — si le serveur utilise OAuth, injecter la clé de signature JWT
+      if (config.authMode === 'OAUTH') {
+        const oauthSigningKey = process.env['OAUTH_SIGNING_KEY']
+        if (oauthSigningKey) {
+          await this.setWorkerSecret(workerName, 'OAUTH_SIGNING_KEY', oauthSigningKey)
+        } else {
+          this.logger.warn(
+            { serverId: config.serverId },
+            'OAUTH_SIGNING_KEY env var is missing — Worker will reject all OAuth tokens',
+          )
+        }
       }
 
       await this.putKvConfig(config)

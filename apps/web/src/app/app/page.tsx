@@ -96,7 +96,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (me && servers && !me.hasCompletedOnboarding && servers.length === 0) {
-      router.replace('/onboarding')
+      router.replace('/app/onboarding')
     }
   }, [me, servers, router])
 
@@ -114,7 +114,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <Button asChild>
-          <Link href="/servers/new">
+          <Link href="/app/servers/new">
             <Plus className="h-4 w-4 mr-2" />
             Nouveau serveur
           </Link>
@@ -191,7 +191,7 @@ export default function DashboardPage() {
               </div>
             )}
             <Button variant="outline" size="sm" asChild>
-              <Link href="/servers" className="flex items-center gap-1.5">
+              <Link href="/app/servers" className="flex items-center gap-1.5">
                 Gérer les serveurs
                 <ArrowRight className="h-3.5 w-3.5" />
               </Link>
