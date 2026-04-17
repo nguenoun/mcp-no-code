@@ -286,11 +286,32 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
-      return Response.json({
-        status: "ok",
-        serverId: SERVER_ID,
-        toolCount: TOOLS_CONFIG.length,
-        tools: TOOLS_CONFIG.map((t) => t.name),
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          serverId: SERVER_ID,
+          authMode: env.AUTH_MODE ?? "API_KEY",
+          toolCount: TOOLS_CONFIG.length,
+          tools: TOOLS_CONFIG.map((t) => t.name),
+        }),
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        },
+      );
+    }
+
+    // CORS preflight
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        },
       });
     }
 

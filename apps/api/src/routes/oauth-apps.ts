@@ -5,6 +5,7 @@ import type { ApiResponse } from '@mcpbuilder/shared'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { generateClientId, generateClientSecret, hashClientSecret, isValidRedirectUri } from '../lib/oauth-client'
+import { triggerCfRedeploy } from '../services/cloudflare-service'
 
 const router = Router({ mergeParams: true })
 
@@ -16,7 +17,7 @@ const createOAuthAppSchema = z.object({
 })
 
 const authModeSchema = z.object({
-  mode: z.enum(['API_KEY', 'OAUTH']),
+  authMode: z.enum(['API_KEY', 'OAUTH']),
 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -244,22 +245,30 @@ router.put('/auth-mode', authMiddleware, async (req, res, next) => {
     if (!parsed.success) {
       throw AppError.validation('Invalid request body', parsed.error.flatten())
     }
-    const { mode } = parsed.data
+    const { authMode } = parsed.data
 
     const server = await prisma.mcpServer.update({
       where: { id: serverId! },
-      data: { authMode: mode },
-      select: { id: true, authMode: true },
+      data: { authMode },
+      select: { id: true, authMode: true, runtimeMode: true },
     })
 
-    if (mode === 'API_KEY') {
+    if (authMode === 'API_KEY') {
       await prisma.oAuthToken.updateMany({
         where: { mcpServerId: serverId!, revokedAt: null },
         data: { revokedAt: new Date() },
       })
     }
 
-    const response: ApiResponse<typeof server> = { success: true, data: server }
+    // Redéployer le worker CF pour qu'il applique le nouveau mode d'auth
+    if (server.runtimeMode === 'CLOUDFLARE') {
+      triggerCfRedeploy(serverId!)
+    }
+
+    const response: ApiResponse<{ id: string; authMode: string }> = {
+      success: true,
+      data: { id: server.id, authMode: server.authMode },
+    }
     res.json(response)
   } catch (err) {
     next(err)

@@ -61,6 +61,7 @@ export function triggerCfRedeploy(serverId: string): void {
       const config: WorkerDeployConfig = {
         serverId: server.id,
         serverName: server.name,
+        authMode: (server.authMode as 'API_KEY' | 'OAUTH') ?? 'API_KEY',
         tools: server.tools.map((t) => ({
           name: t.name,
           description: t.description,

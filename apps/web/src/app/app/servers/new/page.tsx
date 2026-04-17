@@ -979,6 +979,7 @@ export default function NewServerPage() {
   const [serverDescription, setServerDescription] = useState('')
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('LOCAL')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const importFromUrl = useImportFromUrl()
   const importFromContent = useImportFromContent()
@@ -1060,12 +1061,15 @@ export default function NewServerPage() {
   const handleSubmit = useCallback(async () => {
     if (!parsedResult || !workspaceId) return
     setIsSubmitting(true)
+    setSubmitError(null)
+    let createdServerId: string | null = null
     try {
       const server = await createServer.mutateAsync({
         name: serverName,
         runtimeMode,
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
+      createdServerId = server.id
 
       const toolPayloads = [...selectedIds].map((i) => ({
         name: edits[i]?.name ?? parsedResult.tools[i]!.suggestedName,
@@ -1084,13 +1088,23 @@ export default function NewServerPage() {
         const url = `/api/v1/servers/${server.id}/tools${isLast ? '' : '?skipDeploy=true'}`
         await apiClient.post(url, toolPayloads[i])
       }
-
-      router.push(`/app/servers/${server.id}`)
-    } catch {
-      // Errors are surfaced via createServer.error if needed
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Une erreur inattendue est survenue lors de la création du serveur'
+      if (!createdServerId) {
+        // Échec avant même la création du serveur → on reste sur la page
+        setSubmitError(msg)
+        setIsSubmitting(false)
+        return
+      }
+      // Le serveur a été créé mais un tool a échoué → on redirige quand même
+      console.error('[MCPBuilder] Erreur lors de l\'ajout des tools :', msg)
     } finally {
       setIsSubmitting(false)
     }
+    router.push(`/app/servers/${createdServerId}`)
   }, [parsedResult, selectedIds, edits, serverName, serverDescription, runtimeMode, workspaceId, router, createServer])
 
   // ─── Submit (Manual) ──────────────────────────────────────────────────────────
@@ -1098,12 +1112,15 @@ export default function NewServerPage() {
   const handleSubmitManual = useCallback(async () => {
     if (!workspaceId) return
     setIsSubmitting(true)
+    setSubmitError(null)
+    let createdServerId: string | null = null
     try {
       const server = await createServer.mutateAsync({
         name: serverName,
         runtimeMode,
         ...(serverDescription.trim() && { description: serverDescription.trim() }),
       })
+      createdServerId = server.id
 
       for (let i = 0; i < manualTools.length; i++) {
         const isLast = i === manualTools.length - 1
@@ -1118,13 +1135,23 @@ export default function NewServerPage() {
           isEnabled: true,
         })
       }
-
-      router.push(`/app/servers/${server.id}`)
-    } catch {
-      // Errors are surfaced via createServer.error if needed
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Une erreur inattendue est survenue lors de la création du serveur'
+      if (!createdServerId) {
+        // Échec avant même la création du serveur → on reste sur la page
+        setSubmitError(msg)
+        setIsSubmitting(false)
+        return
+      }
+      // Le serveur a été créé mais un tool a échoué → on redirige quand même
+      console.error('[MCPBuilder] Erreur lors de l\'ajout des tools :', msg)
     } finally {
       setIsSubmitting(false)
     }
+    router.push(`/app/servers/${createdServerId}`)
   }, [manualTools, serverName, serverDescription, runtimeMode, workspaceId, router, createServer])
 
   // ─── Render ─────────────────────────────────────────────────────────────────
@@ -1231,6 +1258,13 @@ export default function NewServerPage() {
               onBack={() => setStep(2)}
               isSubmitting={isSubmitting}
             />
+          )}
+
+          {step === 3 && submitError && (
+            <div className="mt-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{submitError}</span>
+            </div>
           )}
         </CardContent>
       </Card>

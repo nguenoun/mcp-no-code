@@ -220,6 +220,37 @@ export function useDeploymentStatus(serverId: string | null, enabled = false) {
   })
 }
 
+// ─── useDeploymentVerify ──────────────────────────────────────────────────────
+
+export type CheckStatus = 'ok' | 'mismatch' | 'unknown' | 'fail'
+
+export interface DeploymentVerification {
+  applicable: boolean
+  reason?: string
+  workerReachable: boolean
+  healthLatencyMs: number | null
+  endpointUrl: string
+  overallStatus: 'ok' | 'degraded' | 'error'
+  checks: {
+    serverId: { status: CheckStatus; worker: string | null; expected: string }
+    authMode: { status: CheckStatus; worker: string | null; expected: string }
+    toolCount: { status: CheckStatus; worker: number | null; expected: number }
+    tools: { status: CheckStatus; missingFromWorker: string[]; extraInWorker: string[] }
+    authRejection: { status: CheckStatus }
+  }
+}
+
+export function useDeploymentVerify(serverId: string) {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.get<ApiResponse<DeploymentVerification>>(
+        `/api/v1/servers/${serverId}/deployment-verify`,
+      )
+      return res.data.data
+    },
+  })
+}
+
 // ─── useRuntimeConfig ─────────────────────────────────────────────────────────
 
 export function useRuntimeConfig() {

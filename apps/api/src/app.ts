@@ -18,6 +18,7 @@ import internalRouter from './routes/internal'
 import oauthAppsRouter from './routes/oauth-apps'
 import oauthServerRouter from './routes/oauth-server'
 import oauthConsentRouter from './routes/oauth-consent'
+import githubImportRouter from './routes/github-import'
 import { runtimeManager } from './services/runtime-manager'
 import { prisma } from '@mcpbuilder/db'
 
@@ -270,6 +271,7 @@ app.use('/api/v1/servers', serversRouter)
 // OAuth Apps & sessions management — GET/POST /oauth/apps, DELETE /oauth/apps/:appId,
 // GET/DELETE /oauth/sessions, PUT /auth-mode
 app.use('/api/v1/servers/:serverId', oauthAppsRouter)
+app.use('/api/v1/servers/:serverId/import', githubImportRouter)
 app.use('/api/v1/servers/:serverId/tools', toolsRouter)
 app.use('/api/v1/templates', templatesRouter)
 app.use('/api/templates', templatesRouter)

@@ -6,7 +6,7 @@ import {
   ArrowLeft, Copy, Check, RefreshCw, RotateCcw, Play,
   Loader2, AlertCircle, CheckCircle2, Clock, ChevronLeft, ChevronRight, Plus,
   Zap, Globe, Trash2, Activity, Save, Search, CalendarDays,
-  ShieldCheck, Key, Users, X,
+  ShieldCheck, Key, Users, X, Github,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -53,8 +53,10 @@ import {
   useUpdateServer,
   useDeleteServer,
   useDeploymentStatus,
+  useDeploymentVerify,
   type ToolTestResult,
   type ServerWithMeta,
+  type DeploymentVerification,
 } from '@/hooks/use-servers'
 import { useCredentials } from '@/hooks/use-credentials'
 import type { ApiResponse } from '@mcpbuilder/shared'
@@ -66,6 +68,7 @@ import {
   useDeleteTool,
 } from '@/hooks/use-tools'
 import { useLogs } from '@/hooks/use-logs'
+import { GithubImportDialog } from '@/components/github-import/GithubImportDialog'
 import {
   useOAuthApps,
   useCreateOAuthApp,
@@ -187,6 +190,7 @@ function ToolsTab({
 }) {
   const [page, setPage] = React.useState(1)
   const [modalOpen, setModalOpen] = React.useState(false)
+  const [githubImportOpen, setGithubImportOpen] = React.useState(false)
   const [editingTool, setEditingTool] = React.useState<McpTool | undefined>()
 
   const { data, isLoading } = useTools(serverId, page)
@@ -214,14 +218,24 @@ function ToolsTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
           {pagination ? `${pagination.total} tool${pagination.total !== 1 ? 's' : ''}` : ''}
         </p>
-        <Button size="sm" onClick={handleOpenCreate}>
-          <Plus className="h-4 w-4 mr-2" />
-          Ajouter un tool
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setGithubImportOpen(true)}
+          >
+            <Github className="h-4 w-4 mr-2" />
+            Import GitHub
+          </Button>
+          <Button size="sm" onClick={handleOpenCreate}>
+            <Plus className="h-4 w-4 mr-2" />
+            Ajouter un tool
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -281,6 +295,15 @@ function ToolsTab({
         onOpenChange={setModalOpen}
         tool={editingTool}
         onSave={handleSave}
+      />
+
+      <GithubImportDialog
+        serverId={serverId}
+        open={githubImportOpen}
+        onOpenChange={(v) => {
+          setGithubImportOpen(v)
+          if (!v) onRedeployTriggered?.()
+        }}
       />
     </div>
   )
@@ -402,6 +425,166 @@ function TesterTab({ serverId }: { serverId: string }) {
   )
 }
 
+// ─── DeploymentVerifyPanel ────────────────────────────────────────────────────
+
+function CheckRow({
+  label,
+  status,
+  detail,
+}: {
+  label: string
+  status: 'ok' | 'mismatch' | 'unknown' | 'fail'
+  detail?: string
+}) {
+  const icon =
+    status === 'ok' ? (
+      <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+    ) : status === 'mismatch' || status === 'fail' ? (
+      <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+    ) : (
+      <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+    )
+
+  return (
+    <div className="flex items-start gap-3 py-2 border-b last:border-0">
+      {icon}
+      <div className="flex-1 min-w-0">
+        <span className="text-sm">{label}</span>
+        {detail && (
+          <p className="text-xs text-muted-foreground mt-0.5 font-mono">{detail}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DeploymentVerifyPanel({ serverId, onRedeploy }: { serverId: string; onRedeploy: () => void }) {
+  const verify = useDeploymentVerify(serverId)
+  const result = verify.data as DeploymentVerification | undefined
+
+  const handleRun = () => { verify.mutate() }
+
+  const statusColor =
+    !result ? '' :
+    result.overallStatus === 'ok' ? 'border-emerald-200 bg-emerald-50/40' :
+    result.overallStatus === 'degraded' ? 'border-amber-200 bg-amber-50/40' :
+    'border-destructive/30 bg-destructive/5'
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="flex items-center gap-2">
+          <Zap className="h-3.5 w-3.5 text-orange-600" />
+          Vérification du déploiement
+        </Label>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs"
+          onClick={handleRun}
+          disabled={verify.isPending}
+        >
+          {verify.isPending ? (
+            <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Vérification…</>
+          ) : (
+            <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Vérifier</>
+          )}
+        </Button>
+      </div>
+
+      {result && result.applicable && (
+        <Card className={cn('border', statusColor)}>
+          <CardContent className="p-4 space-y-1">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-2">
+              <span className={cn(
+                'text-xs font-semibold',
+                result.overallStatus === 'ok' ? 'text-emerald-700' :
+                result.overallStatus === 'degraded' ? 'text-amber-700' :
+                'text-destructive',
+              )}>
+                {result.overallStatus === 'ok' && '✓ Worker synchronisé'}
+                {result.overallStatus === 'degraded' && '⚠ Désynchronisation détectée — redéploiement requis'}
+                {result.overallStatus === 'error' && '✗ Worker inaccessible'}
+              </span>
+              {result.healthLatencyMs !== null && (
+                <span className="text-xs text-muted-foreground">{result.healthLatencyMs}ms</span>
+              )}
+            </div>
+
+            {/* Checks — quand inaccessible, on affiche juste l'URL sans dupliquer le message d'erreur */}
+            {!result.workerReachable ? (
+              <div className="flex items-start gap-3 py-2">
+                <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm">Impossible de joindre le worker</span>
+                  <p className="text-xs text-muted-foreground mt-0.5 font-mono">{result.endpointUrl}</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <CheckRow
+                  label="Endpoint accessible"
+                  status="ok"
+                  detail={result.endpointUrl}
+                />
+                <CheckRow
+                  label="Server ID"
+                  status={result.checks.serverId.status}
+                  detail={
+                    result.checks.serverId.status !== 'ok'
+                      ? `Worker: ${result.checks.serverId.worker} ≠ Attendu: ${result.checks.serverId.expected}`
+                      : undefined
+                  }
+                />
+                <CheckRow
+                  label="Mode d'authentification"
+                  status={result.checks.authMode.status}
+                  detail={
+                    result.checks.authMode.status !== 'ok'
+                      ? `Worker: ${result.checks.authMode.worker ?? '?'} ≠ DB: ${result.checks.authMode.expected}`
+                      : `${result.checks.authMode.worker ?? result.checks.authMode.expected}`
+                  }
+                />
+                <CheckRow
+                  label={`Tools actifs (${result.checks.toolCount.worker ?? '?'} / ${result.checks.toolCount.expected} attendus)`}
+                  status={result.checks.toolCount.status}
+                  detail={
+                    result.checks.tools.missingFromWorker.length > 0
+                      ? `Manquants dans le worker : ${result.checks.tools.missingFromWorker.join(', ')}`
+                      : result.checks.tools.extraInWorker.length > 0
+                        ? `En surplus dans le worker : ${result.checks.tools.extraInWorker.join(', ')}`
+                        : undefined
+                  }
+                />
+                <CheckRow
+                  label="Rejet des appels non authentifiés"
+                  status={result.checks.authRejection.status}
+                  detail={
+                    result.checks.authRejection.status === 'fail'
+                      ? 'Le worker a répondu sans exiger un token — vérifiez les secrets déployés'
+                      : undefined
+                  }
+                />
+              </>
+            )}
+
+            {/* CTA redeploy */}
+            {(result.overallStatus === 'degraded' || result.overallStatus === 'error') && (
+              <div className="pt-3">
+                <Button size="sm" className="w-full text-xs" onClick={onRedeploy}>
+                  <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                  Redéployer maintenant
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 // ─── Tab: Connexion ───────────────────────────────────────────────────────────
 
 function ConnexionTab({
@@ -410,12 +593,16 @@ function ConnexionTab({
   endpointUrl,
   runtimeMode,
   serverName,
+  authMode,
+  onRedeploy,
 }: {
   serverId: string
   apiKey: string
   endpointUrl: string | null
   runtimeMode: string
   serverName: string
+  authMode: 'API_KEY' | 'OAUTH'
+  onRedeploy?: () => void
 }) {
   const rotateKey = useRotateApiKey()
   const [revealedKey, setRevealedKey] = React.useState<string | null>(null)
@@ -424,7 +611,9 @@ function ConnexionTab({
   const [healthLoading, setHealthLoading] = React.useState(false)
 
   const isCloudflare = runtimeMode === 'CLOUDFLARE'
-  const { data: deployStatus, isLoading: deployLoading } = useDeploymentStatus(serverId, isCloudflare)
+  // enabled=true so the query always runs and we can trigger a manual refetch
+  const { data: deployStatus, isLoading: deployLoading, refetch: refetchDeployStatus } =
+    useDeploymentStatus(serverId, isCloudflare)
 
   const displayKey = revealedKey ?? apiKey
   const maskedKey = `${displayKey.slice(0, 8)}${'•'.repeat(Math.max(0, displayKey.length - 16))}${displayKey.slice(-8)}`
@@ -435,16 +624,17 @@ function ConnexionTab({
     setRotateConfirm(false)
   }
 
+  // Routes the health check through the backend (avoids CORS on direct browser fetch).
+  // Workers deployed before the CORS fix also benefit from this approach.
   const handleHealthCheck = async () => {
-    if (!endpointUrl) return
     setHealthLoading(true)
     setHealthResult(null)
-    const startMs = Date.now()
     try {
-      const r = await fetch(`${endpointUrl}/health`)
-      setHealthResult({ ok: r.ok, latencyMs: Date.now() - startMs })
+      const { data } = await refetchDeployStatus()
+      const hc = data?.healthCheck ?? null
+      setHealthResult(hc ? { ok: hc.ok, latencyMs: hc.latencyMs } : { ok: false, latencyMs: 0 })
     } catch {
-      setHealthResult({ ok: false, latencyMs: Date.now() - startMs })
+      setHealthResult({ ok: false, latencyMs: 0 })
     } finally {
       setHealthLoading(false)
     }
@@ -453,29 +643,51 @@ function ConnexionTab({
   const mcpUrl = endpointUrl ? `${endpointUrl}/mcp` : null
   const sseUrl = endpointUrl ? `${endpointUrl}/sse` : null
 
+  const isOAuth = authMode === 'OAUTH'
+  const apiBaseUrl =
+    typeof process !== 'undefined'
+      ? (process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:4000')
+      : 'http://localhost:4000'
+  const discoveryUrl = `${apiBaseUrl}/mcp/${serverId}/.well-known/oauth-authorization-server`
+  const authorizeUrl = `${apiBaseUrl}/mcp/${serverId}/authorize`
+  const tokenUrl = `${apiBaseUrl}/mcp/${serverId}/token`
+  const revokeUrl = `${apiBaseUrl}/mcp/${serverId}/revoke`
+
+  // Integration snippets — content depends on auth mode
   const cfSnippet = mcpUrl
     ? JSON.stringify(
-        {
-          mcpServers: {
-            [serverName]: {
-              url: mcpUrl,
-              headers: { Authorization: `Bearer ${displayKey}` },
+        isOAuth
+          ? {
+              mcpServers: {
+                [serverName]: {
+                  url: mcpUrl,
+                  // OAuth clients auto-discover auth via /.well-known/
+                },
+              },
+            }
+          : {
+              mcpServers: {
+                [serverName]: {
+                  url: mcpUrl,
+                  headers: { Authorization: `Bearer ${displayKey}` },
+                },
+              },
             },
-          },
-        },
         null,
         2,
       )
     : ''
 
   const localSnippet = sseUrl
-    ? `// claude_desktop_config.json\n${JSON.stringify(
+    ? `// mcp_config.json\n${JSON.stringify(
         {
           mcpServers: {
             [serverName]: {
               command: 'npx',
               args: ['-y', '@mcpbuilder/client'],
-              env: { MCP_URL: sseUrl, MCP_API_KEY: displayKey },
+              env: isOAuth
+                ? { MCP_URL: sseUrl }
+                : { MCP_URL: sseUrl, MCP_API_KEY: displayKey },
             },
           },
         },
@@ -486,6 +698,50 @@ function ConnexionTab({
 
   return (
     <div className="space-y-6">
+
+      {/* ── Auth mode banner ─────────────────────────────────────────────────── */}
+      <div
+        className={cn(
+          'flex items-start gap-3 rounded-lg border px-4 py-3',
+          isOAuth
+            ? 'border-purple-200 bg-purple-50/60'
+            : 'border-blue-200 bg-blue-50/60',
+        )}
+      >
+        <div
+          className={cn(
+            'mt-0.5 rounded-md p-1.5 shrink-0',
+            isOAuth ? 'bg-purple-100' : 'bg-blue-100',
+          )}
+        >
+          {isOAuth ? (
+            <ShieldCheck className="h-4 w-4 text-purple-600" />
+          ) : (
+            <Key className="h-4 w-4 text-blue-600" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={cn('text-sm font-semibold', isOAuth ? 'text-purple-800' : 'text-blue-800')}>
+            {isOAuth ? 'Mode OAuth 2.0 actif' : 'Mode Clé API actif'}
+          </p>
+          <p className={cn('text-xs mt-0.5', isOAuth ? 'text-purple-700' : 'text-blue-700')}>
+            {isOAuth
+              ? 'Les clients distants doivent passer par le flux PKCE — ils ne peuvent pas utiliser la clé API statique.'
+              : 'Les clients distants s\'authentifient avec la clé API ci-dessous en tant que Bearer token.'}
+          </p>
+        </div>
+        <Badge
+          className={cn(
+            'shrink-0 text-xs',
+            isOAuth
+              ? 'bg-purple-100 text-purple-700 border-purple-300'
+              : 'bg-blue-100 text-blue-700 border-blue-300',
+          )}
+          variant="outline"
+        >
+          {isOAuth ? 'OAuth 2.0 / PKCE' : 'Bearer token'}
+        </Badge>
+      </div>
 
       {/* ── CF Deployment Status ─────────────────────────────────────────────── */}
       {isCloudflare && (
@@ -545,8 +801,15 @@ function ConnexionTab({
       )}
 
       {/* ── API Key ──────────────────────────────────────────────────────────── */}
-      <div className="space-y-2">
-        <Label>Clé API</Label>
+      <div className={cn('space-y-2', isOAuth && 'opacity-60')}>
+        <div className="flex items-center gap-2">
+          <Label>Clé API</Label>
+          {isOAuth && (
+            <span className="text-xs text-muted-foreground italic">
+              — non utilisée pour l&apos;accès MCP en mode OAuth
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
           <code className="flex-1 text-sm font-mono truncate">
             {revealedKey ? revealedKey : maskedKey}
@@ -594,6 +857,63 @@ function ConnexionTab({
       </div>
 
       <Separator />
+
+      {/* ── OAuth endpoints (mode OAuth uniquement) ────────────────────────────── */}
+      {isOAuth && (
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-purple-600" />
+              Endpoints OAuth 2.0
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Les clients compatibles MCP découvrent ces URLs automatiquement via la metadata (RFC 8414).
+            </p>
+          </div>
+
+          {/* Discovery URL — le plus important */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+              Discovery (RFC 8414)
+            </Label>
+            <div className="flex items-center gap-2 rounded-md border border-purple-200 bg-purple-50/40 px-3 py-2">
+              <code className="flex-1 text-xs font-mono truncate text-purple-800">{discoveryUrl}</code>
+              <CopyButton value={discoveryUrl} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Un client qui supporte l&apos;auto-discovery OAuth lit cette URL pour trouver tous les endpoints.
+            </p>
+          </div>
+
+          {/* Endpoints détaillés */}
+          <div className="grid gap-2">
+            {[
+              { label: 'Authorization', url: authorizeUrl },
+              { label: 'Token', url: tokenUrl },
+              { label: 'Revocation', url: revokeUrl },
+            ].map(({ label, url }) => (
+              <div key={label} className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                <span className="text-xs text-muted-foreground w-24 shrink-0">{label}</span>
+                <code className="flex-1 text-xs font-mono truncate text-muted-foreground">{url}</code>
+                <CopyButton value={url} />
+              </div>
+            ))}
+          </div>
+
+          {/* Prérequis */}
+          <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-800">
+            <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
+            <span>
+              Le client doit d&apos;abord être enregistré dans l&apos;onglet{' '}
+              <strong>Auth → Applications enregistrées</strong> pour obtenir un{' '}
+              <code className="font-mono">client_id</code> et un{' '}
+              <code className="font-mono">client_secret</code>.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {isOAuth && <Separator />}
 
       {/* ── Endpoint URLs ─────────────────────────────────────────────────────── */}
       {endpointUrl ? (
@@ -651,6 +971,13 @@ function ConnexionTab({
                   </span>
                 )}
               </div>
+
+              {/* ── Vérification approfondie du déploiement ─── */}
+              <Separator />
+              <DeploymentVerifyPanel
+                serverId={serverId}
+                onRedeploy={onRedeploy ?? (() => {})}
+              />
             </>
           ) : (
             <>
@@ -673,7 +1000,21 @@ function ConnexionTab({
       {/* ── Integration snippets ──────────────────────────────────────────────── */}
       {isCloudflare && cfSnippet ? (
         <div className="space-y-2">
-          <Label>Intégration Claude Desktop / Cursor</Label>
+          <div className="flex items-center gap-2">
+            <Label>Configuration client MCP</Label>
+            {isOAuth && (
+              <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">
+                OAuth auto-discovery
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Format standard MCP — compatible avec tout client MCP (Claude Desktop, Cursor, VS Code, Zed…).
+            {isOAuth && (
+              <> Le client découvre automatiquement le flux OAuth via{' '}
+              <code className="font-mono">/.well-known/oauth-authorization-server</code>.</>
+            )}
+          </p>
           <div className="relative">
             <ScrollArea className="max-h-[200px]">
               <pre className="rounded-md bg-muted px-4 py-3 text-xs font-mono whitespace-pre">{cfSnippet}</pre>
@@ -683,7 +1024,10 @@ function ConnexionTab({
         </div>
       ) : localSnippet ? (
         <div className="space-y-2">
-          <Label>Exemple de configuration</Label>
+          <Label>Configuration client MCP</Label>
+          <p className="text-xs text-muted-foreground">
+            Format standard MCP — compatible avec tout client MCP (Claude Desktop, Cursor, VS Code, Zed…).
+          </p>
           <div className="relative">
             <ScrollArea className="max-h-[200px]">
               <pre className="rounded-md bg-muted px-4 py-3 text-xs font-mono whitespace-pre">{localSnippet}</pre>
@@ -1752,6 +2096,8 @@ export default function ServerDetailPage() {
             endpointUrl={status?.endpointUrl ?? null}
             runtimeMode={runtimeMode}
             serverName={serverName}
+            authMode={(serverDetail?.authMode as 'API_KEY' | 'OAUTH') ?? 'API_KEY'}
+            onRedeploy={() => restartServer.mutate(serverId)}
           />
         </TabsContent>
 

@@ -349,6 +349,154 @@ router.put('/:serverId', authMiddleware, async (req, res, next) => {
   }
 })
 
+// ─── GET /api/v1/servers/:serverId/deployment-verify ─────────────────────────
+//
+// Vérifie que le worker Cloudflare déployé est synchronisé avec la DB.
+// Compare : server ID, authMode, liste des tools actifs, et teste le rejet auth.
+
+router.get('/:serverId/deployment-verify', authMiddleware, async (req, res, next) => {
+  try {
+    const { serverId } = req.params
+    const server = await getServerForUser(serverId!, req.user.sub)
+
+    if (server.runtimeMode !== 'CLOUDFLARE' || !server.endpointUrl) {
+      res.json({
+        success: true,
+        data: { applicable: false, reason: 'Server is not a Cloudflare deployment' },
+      })
+      return
+    }
+
+    const baseUrl = server.endpointUrl.replace(/\/$/, '')
+    const healthUrl = `${baseUrl}/health`
+    const mcpUrl = `${baseUrl}/mcp`
+
+    // ── 1. Health check ───────────────────────────────────────────────────────
+    type HealthPayload = {
+      status: string
+      serverId: string
+      authMode: string
+      toolCount: number
+      tools: string[]
+    }
+
+    let health: HealthPayload | null = null
+    let workerReachable = false
+    let healthLatencyMs: number | null = null
+
+    try {
+      const t0 = Date.now()
+      const r = await fetch(healthUrl, { signal: AbortSignal.timeout(8000) })
+      healthLatencyMs = Date.now() - t0
+      if (r.ok) {
+        health = (await r.json()) as HealthPayload
+        workerReachable = true
+      }
+    } catch {
+      workerReachable = false
+    }
+
+    // ── 2. DB state ───────────────────────────────────────────────────────────
+    const dbTools = await prisma.mcpTool.findMany({
+      where: { mcpServerId: serverId!, isEnabled: true },
+      select: { name: true },
+      orderBy: { createdAt: 'asc' },
+    })
+    const dbToolNames = dbTools.map((t) => t.name)
+    const dbAuthMode = server.authMode ?? 'API_KEY'
+
+    // ── 3. Auth rejection test ─────────────────────────────────────────────────
+    // An unauthenticated POST to /mcp must return 401.
+    let authRejectionStatus: 'ok' | 'fail' | 'unknown' = 'unknown'
+    if (workerReachable) {
+      try {
+        const r = await fetch(mcpUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+          signal: AbortSignal.timeout(8000),
+        })
+        authRejectionStatus = r.status === 401 ? 'ok' : 'fail'
+      } catch {
+        authRejectionStatus = 'unknown'
+      }
+    }
+
+    // ── 4. Build diff ─────────────────────────────────────────────────────────
+    // Only compute diffs when the worker is reachable — otherwise everything
+    // is 'unknown' and showing a false mismatch would be misleading.
+    const workerToolNames: string[] = workerReachable ? (health?.tools ?? []) : []
+    const missingFromWorker = workerReachable
+      ? dbToolNames.filter((n) => !workerToolNames.includes(n))
+      : []
+    const extraInWorker = workerReachable
+      ? workerToolNames.filter((n) => !dbToolNames.includes(n))
+      : []
+
+    const checks = {
+      serverId: {
+        status: !workerReachable
+          ? ('unknown' as const)
+          : health?.serverId === serverId
+            ? ('ok' as const)
+            : ('mismatch' as const),
+        worker: health?.serverId ?? null,
+        expected: serverId!,
+      },
+      authMode: {
+        status: !workerReachable
+          ? ('unknown' as const)
+          : health?.authMode === dbAuthMode
+            ? ('ok' as const)
+            : ('mismatch' as const),
+        worker: health?.authMode ?? null,
+        expected: dbAuthMode,
+      },
+      toolCount: {
+        status: !workerReachable
+          ? ('unknown' as const)
+          : health?.toolCount === dbToolNames.length
+            ? ('ok' as const)
+            : ('mismatch' as const),
+        worker: health?.toolCount ?? null,
+        expected: dbToolNames.length,
+      },
+      tools: {
+        status: !workerReachable
+          ? ('unknown' as const)
+          : missingFromWorker.length === 0 && extraInWorker.length === 0
+            ? ('ok' as const)
+            : ('mismatch' as const),
+        missingFromWorker,
+        extraInWorker,
+      },
+      authRejection: { status: authRejectionStatus },
+    }
+
+    const hasMismatch = Object.values(checks).some((c) => c.status === 'mismatch')
+    const hasFail = checks.authRejection.status === 'fail'
+    const overallStatus = !workerReachable
+      ? 'error'
+      : hasMismatch || hasFail
+        ? 'degraded'
+        : 'ok'
+
+    res.json({
+      success: true,
+      data: {
+        applicable: true,
+        workerReachable,
+        healthLatencyMs,
+        endpointUrl: server.endpointUrl,
+        checks,
+        overallStatus,
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── DELETE /api/v1/servers/:serverId ────────────────────────────────────────
 
 router.delete('/:serverId', authMiddleware, async (req, res, next) => {
@@ -356,10 +504,15 @@ router.delete('/:serverId', authMiddleware, async (req, res, next) => {
     const { serverId } = req.params
     if (!serverId) { next(); return }
 
-    await getServerForUser(serverId, req.user.sub)
+    const server = await getServerForUser(serverId, req.user.sub)
 
-    // Stop runtime first (ignoring errors — we still delete from DB)
+    // Stop local runtime (ignoring errors — we still delete from DB)
     await runtimeManager.stopServer(serverId).catch(() => undefined)
+
+    // Delete Cloudflare worker if applicable (fire-and-forget on error)
+    if (server.runtimeMode === 'CLOUDFLARE' && isCfConfigured()) {
+      await getCfDeployer().deleteWorker(serverId).catch(() => undefined)
+    }
 
     await prisma.mcpServer.delete({ where: { id: serverId } })
 
