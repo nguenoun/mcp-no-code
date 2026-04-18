@@ -90,6 +90,11 @@ export function triggerCfRedeploy(serverId: string): void {
       logger.info({ serverId, success: result.success }, 'CF worker redeploy triggered')
     } catch (err) {
       logger.error({ serverId, err }, 'CF worker redeploy failed')
+      // Mark the server as ERROR so the UI can surface the deployment failure.
+      await prisma.mcpServer.update({
+        where: { id: serverId },
+        data: { status: 'ERROR' },
+      }).catch(() => undefined) // best-effort
     }
   })()
 }

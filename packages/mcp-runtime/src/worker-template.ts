@@ -303,6 +303,36 @@ export default {
       );
     }
 
+    // ── OAuth metadata discovery — RFC 8414 ───────────────────────────────────
+    //
+    // Some MCP clients (e.g. Dust) attempt to discover OAuth metadata directly
+    // from the MCP server URL instead of following the as_uri in WWW-Authenticate.
+    // Both discovery paths are proxied to the API so clients work regardless of
+    // which RFC 8414 variant they implement.
+    //
+    //   GET /.well-known/oauth-authorization-server
+    //   GET /.well-known/oauth-authorization-server/{SERVER_ID}  (path-based form)
+
+    if (
+      url.pathname === "/.well-known/oauth-authorization-server" ||
+      url.pathname === "/.well-known/oauth-authorization-server/" + SERVER_ID
+    ) {
+      if (!env.INTERNAL_API_URL) {
+        return Response.json({ error: "OAuth metadata not configured" }, { status: 404 });
+      }
+      const metadataUrl = env.INTERNAL_API_URL.replace(/\\/$/, "") + "/mcp/" + SERVER_ID + "/.well-known/oauth-authorization-server";
+      const metaRes = await fetch(metadataUrl, { headers: { Accept: "application/json" } });
+      const metaBody = await metaRes.text();
+      return new Response(metaBody, {
+        status: metaRes.status,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -319,28 +349,40 @@ export default {
     //
     // AUTH_MODE = 'OAUTH'   → vérifie le JWT avec verifyJwt (WebCrypto HS256)
     // AUTH_MODE = 'API_KEY' → compare le Bearer token à MCP_API_KEY (défaut)
+    //
+    // Toutes les réponses 401 incluent WWW-Authenticate avec as_uri pour que
+    // les clients MCP (Dust, Claude Desktop, etc.) puissent découvrir le serveur
+    // OAuth via RFC 8414 GET {as_uri}/.well-known/oauth-authorization-server.
 
     const authHeader = request.headers.get("Authorization");
     const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+    const asUri = env.INTERNAL_API_URL ? env.INTERNAL_API_URL.replace(/\\/$/, "") + "/mcp/" + SERVER_ID : null;
+    const wwwAuthenticate = asUri
+      ? \`Bearer realm="MCPBuilder", as_uri="\${asUri}"\`
+      : 'Bearer realm="MCPBuilder"';
 
     if (env.AUTH_MODE === "OAUTH") {
       if (!bearerToken || !env.OAUTH_SIGNING_KEY) {
         return new Response(
           JSON.stringify({ error: "Unauthorized", message: "Missing Bearer token or signing key" }),
-          { status: 401, headers: { "Content-Type": "application/json" } },
+          { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": wwwAuthenticate } },
         );
       }
       const valid = await verifyJwt(bearerToken, env.OAUTH_SIGNING_KEY, SERVER_ID);
       if (!valid) {
         return new Response(
           JSON.stringify({ error: "Unauthorized", message: "Invalid or expired OAuth token" }),
-          { status: 401, headers: { "Content-Type": "application/json" } },
+          { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": wwwAuthenticate } },
         );
       }
     } else {
       // API_KEY (default)
       if (!bearerToken || bearerToken !== env.MCP_API_KEY) {
-        return new Response("Unauthorized", { status: 401 });
+        return new Response(
+          JSON.stringify({ error: "Unauthorized", message: "Missing or invalid API key" }),
+          { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": wwwAuthenticate } },
+        );
       }
     }
 

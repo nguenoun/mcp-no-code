@@ -38,7 +38,12 @@ export async function analyzeWithAI(params: {
 
   const truncated = readme.slice(0, MAX_README_CHARS)
 
-  const prompt = buildPrompt({ repoName, repoDescription, baseUrl, readme: truncated })
+  const prompt = buildPrompt({
+    repoName,
+    repoDescription,
+    readme: truncated,
+    ...(baseUrl !== undefined && { baseUrl }),
+  })
 
   const res = await fetch(ANTHROPIC_API, {
     method: 'POST',

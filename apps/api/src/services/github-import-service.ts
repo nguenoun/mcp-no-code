@@ -67,7 +67,12 @@ export async function analyzeGithubRepo(params: {
   const { repoUrl, branch, githubToken, baseUrl } = params
   const { owner, repo } = parseGithubUrl(repoUrl)
 
-  const fetched = await fetchGithubRepo({ owner, repo, branch, token: githubToken })
+  const fetched = await fetchGithubRepo({
+    owner,
+    repo,
+    ...(branch !== undefined && { branch }),
+    ...(githubToken !== undefined && { token: githubToken }),
+  })
 
   // ── OpenAPI path ──────────────────────────────────────────────────────────
   if (fetched.type === 'openapi') {
@@ -100,7 +105,7 @@ export async function analyzeGithubRepo(params: {
     readme: fetched.content,
     repoName: fetched.repoName,
     repoDescription: fetched.repoDescription,
-    baseUrl,
+    ...(baseUrl !== undefined && { baseUrl }),
   })
 
   return {

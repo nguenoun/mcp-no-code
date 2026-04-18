@@ -36,6 +36,23 @@ export interface ConfirmResult {
   redeployTriggered: boolean
 }
 
+// ─── useAnalyzeGithubRepoStandalone ──────────────────────────────────────────
+//
+// Used during server *creation* — no serverId needed yet.
+// Calls POST /api/v1/import/github
+
+export function useAnalyzeGithubRepoStandalone() {
+  return useMutation({
+    mutationFn: async (params: AnalyzeParams) => {
+      const res = await apiClient.post<ApiResponse<GithubAnalyzeResult>>(
+        '/api/v1/import/github',
+        params,
+      )
+      return res.data.data
+    },
+  })
+}
+
 // ─── useAnalyzeGithubRepo ─────────────────────────────────────────────────────
 
 export function useAnalyzeGithubRepo(serverId: string) {

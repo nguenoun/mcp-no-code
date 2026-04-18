@@ -1,7 +1,9 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '@mcpbuilder/db'
+import type { Prisma } from '@mcpbuilder/db'
 import type { ApiResponse } from '@mcpbuilder/shared'
+import { ERROR_CODES } from '@mcpbuilder/shared'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { triggerCfRedeploy } from '../services/cloudflare-service'
@@ -46,9 +48,9 @@ const jsonSchemaValueSchema: z.ZodType<unknown> = z.lazy(() =>
   ]),
 )
 
-const jsonSchema7Schema: z.ZodType<Record<string, unknown>> = z
+const jsonSchema7Schema = z
   .record(jsonSchemaValueSchema)
-  .default({})
+  .default({}) as unknown as z.ZodType<Record<string, unknown>>
 
 const toolSchema = z.object({
   name: z
@@ -102,13 +104,13 @@ router.post('/analyze', authMiddleware, async (req, res, next) => {
     try {
       result = await analyzeGithubRepo({
         repoUrl: body.repoUrl,
-        branch: body.branch,
-        githubToken: body.githubToken,
-        baseUrl: body.baseUrl,
+        ...(body.branch !== undefined && { branch: body.branch }),
+        ...(body.githubToken !== undefined && { githubToken: body.githubToken }),
+        ...(body.baseUrl !== undefined && { baseUrl: body.baseUrl }),
       })
     } catch (err) {
       throw new AppError(
-        'GITHUB_IMPORT_FAILED',
+        ERROR_CODES.IMPORT_FETCH_FAILED,
         err instanceof Error ? err.message : 'Failed to analyze repository',
         422,
       )
@@ -153,8 +155,8 @@ router.post('/confirm', authMiddleware, async (req, res, next) => {
             description: tool.description,
             httpMethod: tool.httpMethod,
             httpUrl: tool.httpUrl,
-            parametersSchema: tool.parametersSchema,
-            headersConfig: tool.headersConfig,
+            parametersSchema: tool.parametersSchema as Prisma.InputJsonValue,
+            headersConfig: tool.headersConfig as Prisma.InputJsonValue,
             isEnabled: tool.isEnabled,
           },
         }),

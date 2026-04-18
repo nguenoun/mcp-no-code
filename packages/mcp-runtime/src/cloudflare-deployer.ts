@@ -138,6 +138,24 @@ export class CloudflareDeployer {
     await this.parseCloudflareResponse<Record<string, unknown>>(response, endpoint)
   }
 
+  /**
+   * Enables the workers.dev subdomain route for a worker.
+   * Without this call the worker is deployed but returns 404 from its workers.dev URL.
+   * PUT /accounts/{account_id}/workers/scripts/{script_name}/subdomain
+   */
+  private async enableWorkersDevSubdomain(workerName: string): Promise<void> {
+    const endpoint = `${this.apiBaseUrl}/workers/scripts/${workerName}/subdomain`
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: true, previews_enabled: false }),
+    })
+    await this.parseCloudflareResponse<Record<string, unknown>>(response, endpoint)
+  }
+
   private async putKvConfig(config: WorkerDeployConfig): Promise<void> {
     const key = `server:${config.serverId}:config`
     const endpoint = `${this.apiBaseUrl}/storage/kv/namespaces/${this.kvNamespaceId}/values/${encodeURIComponent(key)}`
@@ -147,21 +165,27 @@ export class CloudflareDeployer {
       credentialType: config.credential?.type ?? null,
     })
 
-    const response = await fetch(endpoint, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${this.apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: payload,
-    })
+    try {
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: payload,
+      })
 
-    if (!response.ok) {
-      const body = await response.text()
-      throw new CloudflareDeployError(
-        `Unable to store config in KV: ${body || response.statusText}`,
-        endpoint,
-      )
+      if (!response.ok) {
+        const body = await response.text()
+        // KV write is best-effort — the worker script already has tools inlined,
+        // so a KV failure should not block a successful worker deployment.
+        this.logger.warn(
+          { serverId: config.serverId, status: response.status, body },
+          'KV config write failed (non-fatal) — worker is still functional',
+        )
+      }
+    } catch (err) {
+      this.logger.warn({ serverId: config.serverId, err }, 'KV config write error (non-fatal)')
     }
   }
 
@@ -217,6 +241,10 @@ export class CloudflareDeployer {
       })
 
       await this.parseCloudflareResponse<WorkerMetadataResponse>(deployResponse, deployEndpoint)
+
+      // Enable the workers.dev subdomain route so the worker is reachable at
+      // https://{workerName}.{workersSubdomain}.workers.dev
+      await this.enableWorkersDevSubdomain(workerName)
 
       await this.setWorkerSecret(workerName, 'MCP_API_KEY', apiKey)
       if (config.credential?.encryptedValue) {

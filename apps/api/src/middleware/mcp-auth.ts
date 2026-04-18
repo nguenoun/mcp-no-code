@@ -159,6 +159,21 @@ async function isJtiRevoked(jti: string, mcpServerId: string): Promise<boolean> 
   return false
 }
 
+// ─── WWW-Authenticate builder ─────────────────────────────────────────────────
+
+/**
+ * Construit le header WWW-Authenticate RFC 6750 + MCP spec.
+ * Le client MCP lit `as_uri` pour découvrir les métadonnées OAuth via
+ * GET {as_uri}/.well-known/oauth-authorization-server
+ */
+function wwwAuthenticateHeader(req: Request, serverId: string): string {
+  const apiBase =
+    process.env['API_URL'] ??
+    `${req.protocol}://${req.get('host')}`
+  const asUri = `${apiBase}/mcp/${serverId}`
+  return `Bearer realm="MCPBuilder", as_uri="${asUri}"`
+}
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 export async function mcpAuthMiddleware(
@@ -183,10 +198,15 @@ export async function mcpAuthMiddleware(
     const authHeader = req.headers['authorization']
     if (!authHeader?.startsWith('Bearer ')) {
       await logAccess(serverId, ip, false, 'missing-token')
-      res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Missing or invalid Authorization header' },
-      })
+      // WWW-Authenticate is required by RFC 6750 and the MCP OAuth spec so that
+      // clients can discover the authorization server and initiate the OAuth flow.
+      res
+        .status(401)
+        .set('WWW-Authenticate', wwwAuthenticateHeader(req, serverId))
+        .json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Missing or invalid Authorization header' },
+        })
       return
     }
 
@@ -208,10 +228,13 @@ export async function mcpAuthMiddleware(
       // Vérifie que le JWT cible bien ce serveur
       if (oauthPayload.sid !== serverId) {
         await logAccess(serverId, ip, false, 'oauth-sid-mismatch')
-        res.status(401).json({
-          success: false,
-          error: { code: 'UNAUTHORIZED', message: 'Token not valid for this server' },
-        })
+        res
+          .status(401)
+          .set('WWW-Authenticate', wwwAuthenticateHeader(req, serverId))
+          .json({
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'Token not valid for this server' },
+          })
         return
       }
 
@@ -239,10 +262,13 @@ export async function mcpAuthMiddleware(
       const revoked = await isJtiRevoked(oauthPayload.jti, serverId)
       if (revoked) {
         await logAccess(serverId, ip, false, 'oauth-token-revoked')
-        res.status(401).json({
-          success: false,
-          error: { code: 'UNAUTHORIZED', message: 'Token has been revoked' },
-        })
+        res
+          .status(401)
+          .set('WWW-Authenticate', wwwAuthenticateHeader(req, serverId))
+          .json({
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'Token has been revoked' },
+          })
         return
       }
 
@@ -258,20 +284,26 @@ export async function mcpAuthMiddleware(
 
     if (!server) {
       await logAccess(serverId, ip, false, 'invalid-key')
-      res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid API key' },
-      })
+      res
+        .status(401)
+        .set('WWW-Authenticate', wwwAuthenticateHeader(req, serverId))
+        .json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid API key' },
+        })
       return
     }
 
     // Verify the URL serverId matches the key's server
     if (req.params['serverId'] && server.serverId !== req.params['serverId']) {
       await logAccess(serverId, ip, false, 'serverId-mismatch')
-      res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Invalid API key' },
-      })
+      res
+        .status(401)
+        .set('WWW-Authenticate', wwwAuthenticateHeader(req, serverId))
+        .json({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid API key' },
+        })
       return
     }
 

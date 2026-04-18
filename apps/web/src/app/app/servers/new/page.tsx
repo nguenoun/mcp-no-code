@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle, Plus, Trash2, Cloud, Monitor } from 'lucide-react'
+import { Check, Globe, Pencil, FileText, ChevronRight, Loader2, AlertCircle, Plus, Trash2, Cloud, Monitor, Github, Sparkles, FileCode } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -20,13 +20,20 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useImportFromUrl, useImportFromContent } from '@/hooks/use-import'
 import { useDefaultWorkspace } from '@/hooks/use-workspace'
 import { useCreateServer, useRuntimeConfig } from '@/hooks/use-servers'
+import {
+  useAnalyzeGithubRepoStandalone,
+  type CandidateTool,
+  type GithubAnalyzeResult,
+} from '@/hooks/use-github-import'
 import { apiClient } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 import type { ParsedOpenAPIResult, ParsedTool } from '@mcpbuilder/shared'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Source = 'openapi' | 'manual' | 'template'
+type Source = 'openapi' | 'manual' | 'template' | 'github'
+
+type GithubSelectedTool = CandidateTool & { selected: boolean }
 type OpenAPITab = 'url' | 'file' | 'paste'
 type Step = 1 | 2 | 3
 
@@ -202,6 +209,39 @@ function StepIndicator({ current }: { current: Step }) {
 
 // ─── Step 1 — Source ──────────────────────────────────────────────────────────
 
+// ─── Confidence badge (shared with Step2GithubTools) ─────────────────────────
+
+const METHOD_COLORS: Record<string, string> = {
+  GET: 'bg-blue-100 text-blue-700',
+  POST: 'bg-green-100 text-green-700',
+  PUT: 'bg-orange-100 text-orange-700',
+  PATCH: 'bg-yellow-100 text-yellow-700',
+  DELETE: 'bg-red-100 text-red-700',
+}
+
+function InlineMethodBadge({ method }: { method: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center font-mono text-xs font-semibold rounded px-1.5 py-0.5 shrink-0',
+        METHOD_COLORS[method] ?? 'bg-muted text-muted-foreground',
+      )}
+    >
+      {method}
+    </span>
+  )
+}
+
+function ConfidenceBadge({ confidence }: { confidence: CandidateTool['confidence'] }) {
+  if (confidence === 'high')
+    return <span className="text-xs rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700">Fiable</span>
+  if (confidence === 'medium')
+    return <span className="text-xs rounded px-1.5 py-0.5 bg-blue-100 text-blue-700">Inféré</span>
+  return <span className="text-xs rounded px-1.5 py-0.5 bg-amber-100 text-amber-700">Incertain</span>
+}
+
+// ─── Step1Source ──────────────────────────────────────────────────────────────
+
 function Step1Source({
   source,
   onSourceChange,
@@ -216,6 +256,19 @@ function Step1Source({
   error,
   onNext,
   hasParsed,
+  // GitHub-specific
+  githubRepoUrl,
+  onGithubRepoUrlChange,
+  githubBranch,
+  onGithubBranchChange,
+  githubBaseUrl,
+  onGithubBaseUrlChange,
+  githubToken,
+  onGithubTokenChange,
+  onGithubAnalyze,
+  githubIsLoading,
+  githubError,
+  githubHasParsed,
 }: {
   source: Source
   onSourceChange: (s: Source) => void
@@ -230,8 +283,26 @@ function Step1Source({
   error: string | null
   onNext: () => void
   hasParsed: boolean
+  githubRepoUrl: string
+  onGithubRepoUrlChange: (v: string) => void
+  githubBranch: string
+  onGithubBranchChange: (v: string) => void
+  githubBaseUrl: string
+  onGithubBaseUrlChange: (v: string) => void
+  githubToken: string
+  onGithubTokenChange: (v: string) => void
+  onGithubAnalyze: () => void
+  githubIsLoading: boolean
+  githubError: string | null
+  githubHasParsed: boolean
 }) {
   const sourceOptions: Array<{ value: Source; icon: React.ReactNode; label: string; desc: string }> = [
+    {
+      value: 'github',
+      icon: <Github className="h-5 w-5" />,
+      label: 'Importer depuis GitHub',
+      desc: 'Analyser un repo GitHub pour extraire les endpoints API automatiquement',
+    },
     {
       value: 'openapi',
       icon: <Globe className="h-5 w-5" />,
@@ -259,6 +330,8 @@ function Step1Source({
     reader.onload = (ev) => onContentChange(ev.target?.result as string)
     reader.readAsText(file)
   }
+
+  const githubUrlValid = githubRepoUrl.trim().startsWith('https://github.com/')
 
   return (
     <div className="space-y-6">
@@ -289,6 +362,93 @@ function Step1Source({
           </label>
         ))}
       </RadioGroup>
+
+      {source === 'github' && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="gh-repo">URL du repository *</Label>
+            <Input
+              id="gh-repo"
+              value={githubRepoUrl}
+              onChange={(e) => onGithubRepoUrlChange(e.target.value)}
+              placeholder="https://github.com/owner/repo"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="gh-branch">Branche</Label>
+              <Input
+                id="gh-branch"
+                value={githubBranch}
+                onChange={(e) => onGithubBranchChange(e.target.value)}
+                placeholder="main"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="gh-baseurl">URL de base de l&apos;API</Label>
+              <Input
+                id="gh-baseurl"
+                value={githubBaseUrl}
+                onChange={(e) => onGithubBaseUrlChange(e.target.value)}
+                placeholder="https://api.example.com"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="gh-token">Token GitHub</Label>
+            <Input
+              id="gh-token"
+              type="password"
+              value={githubToken}
+              onChange={(e) => onGithubTokenChange(e.target.value)}
+              placeholder="ghp_… (optionnel, pour les repos privés)"
+              autoComplete="new-password"
+            />
+            <p className="text-xs text-muted-foreground">
+              Non stocké — utilisé uniquement pour cette analyse.
+            </p>
+          </div>
+
+          {githubError && (
+            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 rounded-md p-3">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{githubError}</span>
+            </div>
+          )}
+
+          <Button
+            onClick={onGithubAnalyze}
+            disabled={githubIsLoading || !githubUrlValid}
+            className="w-full"
+          >
+            {githubIsLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Analyse en cours…
+              </>
+            ) : (
+              <>
+                <Github className="h-4 w-4 mr-2" />
+                Analyser le repository
+              </>
+            )}
+          </Button>
+
+          {githubHasParsed && (
+            <Button onClick={onNext} className="w-full" variant="default">
+              Configurer les tools
+              <ChevronRight className="h-4 w-4 ml-2" />
+            </Button>
+          )}
+        </div>
+      )}
 
       {source === 'openapi' && (
         <div className="space-y-4">
@@ -725,6 +885,154 @@ function Step2ManualTools({
   )
 }
 
+// ─── Step 2 — Configure tools (GitHub) ───────────────────────────────────────
+
+function Step2GithubTools({
+  tools,
+  onToolsChange,
+  baseUrl,
+  onBaseUrlChange,
+  source,
+  onNext,
+  onBack,
+}: {
+  tools: GithubSelectedTool[]
+  onToolsChange: (tools: GithubSelectedTool[]) => void
+  baseUrl: string
+  onBaseUrlChange: (v: string) => void
+  source: 'openapi' | 'ai'
+  onNext: () => void
+  onBack: () => void
+}) {
+  const selectedCount = tools.filter((t) => t.selected).length
+
+  const toggleAll = () => {
+    const allSelected = tools.every((t) => t.selected)
+    onToolsChange(tools.map((t) => ({ ...t, selected: !allSelected })))
+  }
+
+  const toggleOne = (idx: number) => {
+    onToolsChange(tools.map((t, i) => (i === idx ? { ...t, selected: !t.selected } : t)))
+  }
+
+  const handleBaseUrlChange = (newBase: string) => {
+    const oldBase = baseUrl.replace(/\/$/, '')
+    const newNormalized = newBase.replace(/\/$/, '')
+    onBaseUrlChange(newBase)
+    if (!oldBase) return
+    onToolsChange(
+      tools.map((t) => ({
+        ...t,
+        httpUrl: t.httpUrl.startsWith(oldBase)
+          ? newNormalized + t.httpUrl.slice(oldBase.length)
+          : t.httpUrl,
+      })),
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Source banner */}
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium',
+          source === 'openapi'
+            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            : 'bg-purple-50 text-purple-700 border border-purple-200',
+        )}
+      >
+        {source === 'openapi' ? (
+          <FileCode className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+        )}
+        {source === 'openapi'
+          ? 'Spec OpenAPI détectée dans le repository'
+          : 'Endpoints extraits par IA depuis le README'}
+      </div>
+
+      {/* Base URL override */}
+      <div className="space-y-1.5">
+        <Label htmlFor="gh-review-baseurl" className="text-xs">
+          URL de base
+        </Label>
+        <Input
+          id="gh-review-baseurl"
+          value={baseUrl}
+          onChange={(e) => handleBaseUrlChange(e.target.value)}
+          placeholder="https://api.example.com"
+          className="h-8 text-xs font-mono"
+        />
+      </div>
+
+      <Separator />
+
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-muted-foreground">
+          {selectedCount} / {tools.length} outil{tools.length !== 1 ? 's' : ''} sélectionné{selectedCount !== 1 ? 's' : ''}
+        </span>
+        <Button variant="ghost" size="sm" onClick={toggleAll}>
+          {tools.every((t) => t.selected) ? 'Tout désélectionner' : 'Tout sélectionner'}
+        </Button>
+      </div>
+
+      <ScrollArea className="h-[340px] pr-3">
+        <div className="space-y-1.5">
+          {tools.map((tool, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => toggleOne(idx)}
+              className={cn(
+                'w-full text-left rounded-md border px-3 py-2.5 transition-colors',
+                tool.selected
+                  ? 'border-primary/30 bg-primary/5'
+                  : 'border-transparent bg-muted/40 opacity-60',
+              )}
+            >
+              <div className="flex items-start gap-2.5">
+                <span
+                  className={cn(
+                    'mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center',
+                    tool.selected ? 'bg-primary border-primary' : 'border-muted-foreground/40',
+                  )}
+                >
+                  {tool.selected && <Check className="h-3 w-3 text-primary-foreground" />}
+                </span>
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <InlineMethodBadge method={tool.httpMethod} />
+                    <span className="text-sm font-medium truncate">{tool.name}</span>
+                    <ConfidenceBadge confidence={tool.confidence} />
+                  </div>
+                  {tool.description && (
+                    <p className="text-xs text-muted-foreground line-clamp-1">{tool.description}</p>
+                  )}
+                  <code className="text-xs font-mono text-muted-foreground truncate block">
+                    {tool.httpUrl}
+                  </code>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </ScrollArea>
+
+      <Separator />
+
+      <div className="flex gap-3">
+        <Button variant="outline" onClick={onBack} className="flex-1">
+          Retour
+        </Button>
+        <Button onClick={onNext} disabled={selectedCount === 0} className="flex-1">
+          Suivant
+          <ChevronRight className="h-4 w-4 ml-2" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Step 3 — Name the server (OpenAPI) ──────────────────────────────────────
 
 function Step3Name({
@@ -961,7 +1269,7 @@ export default function NewServerPage() {
   const { workspaceId } = useDefaultWorkspace()
 
   const [step, setStep] = useState<Step>(1)
-  const [source, setSource] = useState<Source>('openapi')
+  const [source, setSource] = useState<Source>('github')
   const [openApiTab, setOpenApiTab] = useState<OpenAPITab>('url')
   const [urlInput, setUrlInput] = useState('')
   const [contentInput, setContentInput] = useState('')
@@ -975,6 +1283,16 @@ export default function NewServerPage() {
   // Manual tool state
   const [manualTools, setManualTools] = useState<ManualTool[]>([])
 
+  // GitHub source state
+  const [githubRepoUrl, setGithubRepoUrl] = useState('')
+  const [githubBranch, setGithubBranch] = useState('')
+  const [githubBaseUrlInput, setGithubBaseUrlInput] = useState('')
+  const [githubToken, setGithubToken] = useState('')
+  const [githubError, setGithubError] = useState<string | null>(null)
+  const [githubResult, setGithubResult] = useState<GithubAnalyzeResult | null>(null)
+  const [githubTools, setGithubTools] = useState<GithubSelectedTool[]>([])
+  const [githubReviewBaseUrl, setGithubReviewBaseUrl] = useState('')
+
   const [serverName, setServerName] = useState('')
   const [serverDescription, setServerDescription] = useState('')
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>('LOCAL')
@@ -983,6 +1301,7 @@ export default function NewServerPage() {
 
   const importFromUrl = useImportFromUrl()
   const importFromContent = useImportFromContent()
+  const analyzeGithub = useAnalyzeGithubRepoStandalone()
   const createServer = useCreateServer(workspaceId ?? '')
   const { data: runtimeConfig } = useRuntimeConfig()
 
@@ -994,6 +1313,7 @@ export default function NewServerPage() {
   }, [runtimeConfig])
 
   const isLoading = importFromUrl.isPending || importFromContent.isPending
+  const githubIsLoading = analyzeGithub.isPending
 
   // ─── Analyze (OpenAPI) ────────────────────────────────────────────────────────
 
@@ -1028,6 +1348,77 @@ export default function NewServerPage() {
       setParseError(msg)
     }
   }, [openApiTab, urlInput, contentInput, workspaceId, importFromUrl, importFromContent, serverName])
+
+  // ─── Analyze (GitHub) ─────────────────────────────────────────────────────────
+
+  const handleGithubAnalyze = useCallback(async () => {
+    setGithubError(null)
+    try {
+      const result = await analyzeGithub.mutateAsync({
+        repoUrl: githubRepoUrl.trim(),
+        ...(githubBranch.trim() && { branch: githubBranch.trim() }),
+        ...(githubBaseUrlInput.trim() && { baseUrl: githubBaseUrlInput.trim() }),
+        ...(githubToken.trim() && { githubToken: githubToken.trim() }),
+      })
+      setGithubResult(result)
+      setGithubReviewBaseUrl(result.baseUrl)
+      setGithubTools(result.tools.map((t) => ({ ...t, selected: t.confidence !== 'low' })))
+      if (!serverName) setServerName(result.title)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message ??
+        (err instanceof Error ? err.message : 'Une erreur est survenue lors de l\'analyse.')
+      setGithubError(msg)
+    }
+  }, [analyzeGithub, githubRepoUrl, githubBranch, githubBaseUrlInput, githubToken, serverName])
+
+  // ─── Submit (GitHub) ──────────────────────────────────────────────────────────
+
+  const handleSubmitGithub = useCallback(async () => {
+    if (!workspaceId) return
+    setIsSubmitting(true)
+    setSubmitError(null)
+    let createdServerId: string | null = null
+    try {
+      const server = await createServer.mutateAsync({
+        name: serverName,
+        runtimeMode,
+        ...(serverDescription.trim() && { description: serverDescription.trim() }),
+      })
+      createdServerId = server.id
+
+      const selected = githubTools
+        .filter((t) => t.selected)
+        .map((t) => ({
+          name: t.name,
+          description: t.description,
+          httpMethod: t.httpMethod,
+          httpUrl: t.httpUrl,
+          parametersSchema: t.parametersSchema,
+          headersConfig: [],
+          isEnabled: true,
+        }))
+
+      if (selected.length > 0) {
+        await apiClient.post(`/api/v1/servers/${server.id}/import/confirm`, { tools: selected })
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Une erreur inattendue est survenue lors de la création du serveur'
+      if (!createdServerId) {
+        setSubmitError(msg)
+        setIsSubmitting(false)
+        return
+      }
+      console.error('[MCPBuilder] Erreur lors de l\'import des tools GitHub :', msg)
+    } finally {
+      setIsSubmitting(false)
+    }
+    router.push(`/app/servers/${createdServerId}`)
+  }, [githubTools, serverName, serverDescription, runtimeMode, workspaceId, router, createServer])
 
   // ─── Toggle tool selection (OpenAPI) ─────────────────────────────────────────
 
@@ -1160,10 +1551,15 @@ export default function NewServerPage() {
     1: { title: 'Nouvelle source', description: 'Choisissez comment créer votre serveur MCP' },
     2: source === 'manual'
       ? { title: 'Configurer les tools', description: 'Ajoutez les tools de votre serveur MCP' }
-      : {
-          title: 'Configurer les tools',
-          description: `${parsedResult?.tools.length ?? 0} tools détectés — sélectionnez et personnalisez`,
-        },
+      : source === 'github'
+        ? {
+            title: 'Outils détectés',
+            description: `${githubResult?.tools.length ?? 0} outil${(githubResult?.tools.length ?? 0) !== 1 ? 's' : ''} détecté${(githubResult?.tools.length ?? 0) !== 1 ? 's' : ''} — sélectionnez ceux à importer`,
+          }
+        : {
+            title: 'Configurer les tools',
+            description: `${parsedResult?.tools.length ?? 0} tools détectés — sélectionnez et personnalisez`,
+          },
     3: { title: 'Nommer le serveur', description: 'Dernière étape avant de créer votre serveur' },
   }
 
@@ -1194,6 +1590,18 @@ export default function NewServerPage() {
               error={parseError}
               onNext={() => source === 'template' ? router.push('/app/templates') : setStep(2)}
               hasParsed={!!parsedResult}
+              githubRepoUrl={githubRepoUrl}
+              onGithubRepoUrlChange={setGithubRepoUrl}
+              githubBranch={githubBranch}
+              onGithubBranchChange={setGithubBranch}
+              githubBaseUrl={githubBaseUrlInput}
+              onGithubBaseUrlChange={setGithubBaseUrlInput}
+              githubToken={githubToken}
+              onGithubTokenChange={setGithubToken}
+              onGithubAnalyze={handleGithubAnalyze}
+              githubIsLoading={githubIsLoading}
+              githubError={githubError}
+              githubHasParsed={!!githubResult}
             />
           )}
 
@@ -1220,6 +1628,18 @@ export default function NewServerPage() {
             <Step2ManualTools
               tools={manualTools}
               onToolsChange={setManualTools}
+              onNext={() => setStep(3)}
+              onBack={() => setStep(1)}
+            />
+          )}
+
+          {step === 2 && source === 'github' && githubResult && (
+            <Step2GithubTools
+              tools={githubTools}
+              onToolsChange={setGithubTools}
+              baseUrl={githubReviewBaseUrl}
+              onBaseUrlChange={setGithubReviewBaseUrl}
+              source={githubResult.source}
               onNext={() => setStep(3)}
               onBack={() => setStep(1)}
             />
@@ -1255,6 +1675,29 @@ export default function NewServerPage() {
               onRuntimeModeChange={setRuntimeMode}
               cloudflareConfigured={runtimeConfig?.cloudflareConfigured ?? false}
               onSubmit={handleSubmitManual}
+              onBack={() => setStep(2)}
+              isSubmitting={isSubmitting}
+            />
+          )}
+
+          {step === 3 && source === 'github' && (
+            <Step3NameManual
+              manualTools={githubTools
+                .filter((t) => t.selected)
+                .map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  httpMethod: t.httpMethod,
+                  httpUrl: t.httpUrl,
+                }))}
+              serverName={serverName}
+              onServerNameChange={setServerName}
+              serverDescription={serverDescription}
+              onServerDescriptionChange={setServerDescription}
+              runtimeMode={runtimeMode}
+              onRuntimeModeChange={setRuntimeMode}
+              cloudflareConfigured={runtimeConfig?.cloudflareConfigured ?? false}
+              onSubmit={handleSubmitGithub}
               onBack={() => setStep(2)}
               isSubmitting={isSubmitting}
             />

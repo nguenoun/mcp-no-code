@@ -14,7 +14,14 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '@mcpbuilder/db'
-import { matchesRegisteredUri, verifyClientSecret } from '../lib/oauth-client'
+import {
+  matchesRegisteredUri,
+  verifyClientSecret,
+  generateClientId,
+  generateClientSecret,
+  hashClientSecret,
+  isValidRedirectUri,
+} from '../lib/oauth-client'
 import {
   signOAuthAccessToken,
   generateJti,
@@ -25,6 +32,28 @@ import {
 import { verifyCodeChallenge } from '../lib/pkce'
 
 const router = Router({ mergeParams: true })
+
+// ─── CORS (OAuth endpoints are accessed by external MCP clients) ───────────────
+//
+// These routes bypass mcpAuthMiddleware (registered before it in app.ts),
+// so they need their own CORS headers. External MCP clients and browsers must
+// be able to reach /.well-known, /authorize, /token, and /revoke.
+
+const OAUTH_CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+  'Access-Control-Max-Age': '86400',
+}
+
+router.use((req, res, next) => {
+  Object.entries(OAUTH_CORS_HEADERS).forEach(([k, v]) => res.set(k, v))
+  if (req.method === 'OPTIONS') {
+    res.status(204).end()
+    return
+  }
+  next()
+})
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,10 +95,90 @@ router.get('/:serverId/.well-known/oauth-authorization-server', (req, res) => {
     authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/token`,
     revocation_endpoint: `${issuer}/revoke`,
+    registration_endpoint: `${issuer}/register`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
   })
+})
+
+// ─── C0. POST /:serverId/register — Dynamic Client Registration (RFC 7591) ────
+//
+// Permet aux clients MCP (Dust, Claude Desktop, etc.) de s'enregistrer
+// automatiquement sans passer par le dashboard.
+// Pas d'authentification requise (open registration) — conforme RFC 7591 §3.1.
+
+const registerBodySchema = z.object({
+  client_name: z.string().min(1).max(255).default('MCP Client'),
+  redirect_uris: z.array(z.string().url()).min(1),
+  grant_types: z.array(z.string()).default(['authorization_code']),
+  response_types: z.array(z.string()).default(['code']),
+  token_endpoint_auth_method: z.string().default('client_secret_post'),
+  scope: z.string().optional(),
+})
+
+router.post('/:serverId/register', async (req, res, next) => {
+  try {
+    const { serverId } = req.params
+
+    const server = await prisma.mcpServer.findUnique({ where: { id: serverId! } })
+    if (!server) {
+      res.status(404).json({ error: 'invalid_client_metadata', error_description: 'MCP server not found' })
+      return
+    }
+
+    const parsed = registerBodySchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_client_metadata', error_description: 'Invalid registration request' })
+      return
+    }
+
+    const { client_name, redirect_uris } = parsed.data
+
+    // Valide les redirect URIs
+    for (const uri of redirect_uris) {
+      if (!isValidRedirectUri(uri)) {
+        res.status(400).json({
+          error: 'invalid_redirect_uri',
+          error_description: `Invalid redirect_uri: ${uri}`,
+        })
+        return
+      }
+    }
+
+    const clientId = generateClientId()
+    const clientSecret = generateClientSecret()
+    const clientSecretHash = await hashClientSecret(clientSecret)
+
+    await prisma.oAuthApp.create({
+      data: {
+        mcpServerId: serverId!,
+        name: client_name,
+        clientId,
+        clientSecretHash,
+        redirectUris: redirect_uris,
+      },
+    })
+
+    const apiBase = process.env['API_URL'] ?? `${req.protocol}://${req.get('host')}`
+    const issuer = `${apiBase}/mcp/${serverId}`
+
+    // RFC 7591 §3.2.1 — réponse 201 avec les credentials du client
+    res.status(201).json({
+      client_id: clientId,
+      client_secret: clientSecret,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      client_name,
+      redirect_uris,
+      grant_types: parsed.data.grant_types,
+      response_types: parsed.data.response_types,
+      token_endpoint_auth_method: parsed.data.token_endpoint_auth_method,
+      registration_client_uri: `${issuer}/register/${clientId}`,
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
 // ─── C2. GET /:serverId/authorize ────────────────────────────────────────────

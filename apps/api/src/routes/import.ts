@@ -6,6 +6,7 @@ import type { ApiResponse, ParsedOpenAPIResult } from '@mcpbuilder/shared'
 import { authMiddleware } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { checkRateLimit, importRateLimitKey } from '../lib/rate-limiter'
+import { analyzeGithubRepo, type GithubAnalyzeResult } from '../services/github-import-service'
 
 const router = Router()
 const parser = new OpenAPIParser()
@@ -100,6 +101,58 @@ router.post('/openapi/content', authMiddleware, async (req, res, next) => {
       data: { ...result, rawSpec: {} },
     }
     res.json(response)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── POST /import/github ─────────────────────────────────────────────────────
+//
+// Standalone GitHub analysis — does not require an existing server.
+// Used during server creation to extract tools before the server exists.
+
+const githubImportSchema = z.object({
+  repoUrl: z
+    .string()
+    .url('Must be a valid URL')
+    .refine((u) => {
+      try {
+        return new URL(u).hostname === 'github.com'
+      } catch {
+        return false
+      }
+    }, 'Only github.com repositories are supported'),
+  branch: z.string().max(255).optional(),
+  githubToken: z.string().max(200).optional(),
+  baseUrl: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => v || undefined),
+})
+
+router.post('/github', authMiddleware, async (req, res, next) => {
+  try {
+    const body = githubImportSchema.parse(req.body)
+
+    let result: GithubAnalyzeResult
+    try {
+      result = await analyzeGithubRepo({
+        repoUrl: body.repoUrl,
+        ...(body.branch !== undefined && { branch: body.branch }),
+        ...(body.githubToken !== undefined && { githubToken: body.githubToken }),
+        ...(body.baseUrl !== undefined && { baseUrl: body.baseUrl }),
+      })
+    } catch (err) {
+      throw new AppError(
+        ERROR_CODES.IMPORT_FETCH_FAILED,
+        err instanceof Error ? err.message : 'Failed to analyze repository',
+        422,
+      )
+    }
+
+    res.json({ success: true, data: result } satisfies ApiResponse<GithubAnalyzeResult>)
   } catch (err) {
     next(err)
   }

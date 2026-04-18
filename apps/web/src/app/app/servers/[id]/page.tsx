@@ -492,6 +492,12 @@ function DeploymentVerifyPanel({ serverId, onRedeploy }: { serverId: string; onR
         </Button>
       </div>
 
+      {result && !result.applicable && (
+        <p className="text-xs text-muted-foreground">
+          Aucun worker déployé — ajoutez des outils pour déclencher le premier déploiement.
+        </p>
+      )}
+
       {result && result.applicable && (
         <Card className={cn('border', statusColor)}>
           <CardContent className="p-4 space-y-1">
@@ -632,7 +638,8 @@ function ConnexionTab({
     try {
       const { data } = await refetchDeployStatus()
       const hc = data?.healthCheck ?? null
-      setHealthResult(hc ? { ok: hc.ok, latencyMs: hc.latencyMs } : { ok: false, latencyMs: 0 })
+      // healthCheck is null when endpointUrl is not set (worker not yet deployed)
+      setHealthResult(hc ?? { ok: false, latencyMs: -1 })
     } catch {
       setHealthResult({ ok: false, latencyMs: 0 })
     } finally {
@@ -967,7 +974,11 @@ function ConnexionTab({
                     )}
                   >
                     {healthResult.ok ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-                    {healthResult.ok ? `OK — ${healthResult.latencyMs}ms` : `Échec — ${healthResult.latencyMs}ms`}
+                    {healthResult.ok
+                      ? `OK — ${healthResult.latencyMs}ms`
+                      : healthResult.latencyMs === -1
+                        ? 'Non déployé — ajoutez des outils'
+                        : `Échec — ${healthResult.latencyMs}ms`}
                   </span>
                 )}
               </div>
